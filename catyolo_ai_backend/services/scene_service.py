@@ -31,7 +31,8 @@ class SceneService:
                      global_detection_enabled: bool = False,
                      global_detection_classes: list[str] = None,
                      global_detection_action_ids: list[UUID] = None,
-                     global_detection_cooldown_seconds: int = 60):
+                     global_detection_cooldown_seconds: int = 60,
+                     debug_depth: bool = False):
         scene_prompt_action_ids_str = [str(uuid) for uuid in scene_prompt_action_ids] if scene_prompt_action_ids else scene_prompt_action_ids
         global_detection_action_ids_str = [str(uuid) for uuid in global_detection_action_ids] if global_detection_action_ids else global_detection_action_ids
         red_zones_dict = self._red_zones_to_dict(red_zones)
@@ -50,6 +51,7 @@ class SceneService:
             global_detection_classes=global_detection_classes or [],
             global_detection_action_ids=global_detection_action_ids_str,
             global_detection_cooldown_seconds=global_detection_cooldown_seconds or 60,
+            debug_depth=1 if debug_depth else 0,
             version=1,
         )
         self.database.create_scene(scene)
@@ -75,7 +77,8 @@ class SceneService:
                      global_detection_enabled: bool = False,
                      global_detection_classes: list[str] = None,
                      global_detection_action_ids: list[UUID] = None,
-                     global_detection_cooldown_seconds: int = 60):
+                     global_detection_cooldown_seconds: int = 60,
+                     debug_depth: bool = False):
         scene = self.database.get_scene(scene_id)
         scene.scene_name = scene_name
         scene.camera_ip_address = camera_ip_address
@@ -99,6 +102,7 @@ class SceneService:
         else:
             scene.global_detection_action_ids = global_detection_action_ids
         scene.global_detection_cooldown_seconds = global_detection_cooldown_seconds or 60
+        scene.debug_depth = 1 if debug_depth else 0
         scene.version = (scene.version or 0) + 1
         self.database.update_scene(scene)
         return scene

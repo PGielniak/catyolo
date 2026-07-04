@@ -82,6 +82,7 @@ async function fromApiResponse(json: any): Promise<Scene> {
     globalDetectionClasses: (json['global_detection_classes'] ?? []) as EntityClass[],
     globalDetectionActionIds: json['global_detection_action_ids'] ?? undefined,
     globalDetectionCooldownSeconds: json['global_detection_cooldown_seconds'] ?? undefined,
+    debugDepth: json['debug_depth'] ?? undefined,
     imageBase64,
     imageWidth: imgW > 0 ? imgW : undefined,
     imageHeight: imgH > 0 ? imgH : undefined,
@@ -149,6 +150,7 @@ async function toApiRequest(scene: Scene): Promise<Record<string, unknown>> {
     global_detection_classes: scene.globalDetectionClasses?.length ? scene.globalDetectionClasses : null,
     global_detection_action_ids: scene.globalDetectionActionIds?.length ? scene.globalDetectionActionIds : null,
     global_detection_cooldown_seconds: scene.globalDetectionCooldownSeconds ?? null,
+    debug_depth: scene.debugDepth ?? false,
   }
 }
 

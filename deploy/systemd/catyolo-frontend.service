@@ -1,0 +1,21 @@
+[Unit]
+Description=CatYolo frontend (serve.py)
+After=network-online.target catyolo-backend.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${CATYOLO_USER}
+Group=${CATYOLO_GROUP}
+WorkingDirectory=${REPO_INSTALL_DIR}/catyolo_ai_frontend
+EnvironmentFile=${CONFIG_DIR}/frontend.env
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/python3 ${REPO_INSTALL_DIR}/catyolo_ai_frontend/serve.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=catyolo-frontend
+
+[Install]
+WantedBy=multi-user.target

@@ -1,6 +1,7 @@
 import logging
 import os
 import signal
+import sys
 import threading
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -22,7 +23,11 @@ from detector.config_watcher import ConfigWatcher
 from detector.events import set_dispatcher
 from detector.handlers.registry import ActionHandlerRegistry
 from detector.handlers.sample_saver import SampleSaverHandler
-from detector.inference.factory import create_shared_device, release_shared_device
+from detector.inference.factory import (
+    NoHailoDeviceError,
+    create_shared_device,
+    release_shared_device,
+)
 from detector.scene_registry import ScenePipelineRegistry
 
 # ── Logging ────────────────────────────────────────────────────────────────
@@ -53,11 +58,22 @@ def main():
 
     # Shared Hailo VDevice — all per-scene backends multiplex over this one
     # device via the HailoRT ROUND_ROBIN scheduler (group_id="SHARED"). If
-    # creation fails, fall back to per-backend device ownership (legacy path);
-    # that preserves the previous behaviour on setups where a shared VDevice
-    # can't be opened.
+    # no Hailo chip or SDK is present, exit immediately so the deployment is
+    # not left running in a useless degraded state.
+    EXIT_ON_NO_HAILO = (
+        os.getenv("EXIT_ON_NO_HAILO", "true").lower() in ("1", "true", "yes")
+    )
     try:
         shared_device = create_shared_device()
+    except NoHailoDeviceError:
+        logger.exception("No Hailo device or SDK available; worker cannot run")
+        if EXIT_ON_NO_HAILO:
+            sys.exit(1)
+        logger.warning(
+            "EXIT_ON_NO_HAILO=false; continuing without Hailo (multi-camera "
+            "will not be possible)"
+        )
+        shared_device = None
     except Exception:
         logger.exception(
             "Failed to create shared VDevice; falling back to per-backend "

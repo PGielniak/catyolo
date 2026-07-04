@@ -1,0 +1,22 @@
+[Unit]
+Description=CatYolo worker (detection pipeline)
+After=network-online.target catyolo-backend.service
+Wants=network-online.target
+Requires=catyolo-backend.service
+
+[Service]
+Type=simple
+User=${CATYOLO_USER}
+Group=${CATYOLO_GROUP}
+WorkingDirectory=${REPO_INSTALL_DIR}/catyolo_ai_worker
+EnvironmentFile=${CONFIG_DIR}/worker.env
+Environment=PATH=${REPO_INSTALL_DIR}/catyolo_ai_worker/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=${REPO_INSTALL_DIR}/catyolo_ai_worker/.venv/bin/worker
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=catyolo-worker
+
+[Install]
+WantedBy=multi-user.target

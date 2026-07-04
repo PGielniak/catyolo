@@ -47,7 +47,10 @@ class DetectionPipeline:
         self._annotated_lock = threading.Lock()
         self._depth_viz = None
         self._depth_viz_lock = threading.Lock()
-        self._depth_show = True
+        # Depth visualization in the debug stream. This is display-only; it
+        # does NOT drive depth inference (which is controlled by the scene's
+        # debug_depth flag and by on-demand overlap detection).
+        self._depth_show = False
         self._depth_show_lock = threading.Lock()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -370,9 +373,13 @@ class DetectionPipeline:
         # TARGET_FPS reduces wasted CPU occlusion work when the NPU is the
         # bottleneck. Tunable via env so multi-camera deployments can dial it
         # down (e.g. 3 feeds at ~10fps each) without a code change.
-        TARGET_FPS = int(os.getenv("TARGET_FPS", "30"))
+        TARGET_FPS = int(os.getenv("TARGET_FPS", "15"))
         target_dt = 1.0 / TARGET_FPS
         next_tick = time.monotonic()
+        # Maximum age of a captured frame before we drop it and grab a newer
+        # one. This keeps the debug stream close to real time when the NPU
+        # can't process every frame (multi-camera, slow models, etc.).
+        MAX_FRAME_AGE = float(os.getenv("MAX_FRAME_AGE_SECONDS", "1.0"))
 
         fps_times = []
 
@@ -381,6 +388,27 @@ class DetectionPipeline:
             if frame is None:
                 time.sleep(0.05)
                 continue
+
+            # Drop stale frames to stay near real time. The capture thread
+            # keeps only the latest frame, so repeated get() calls return
+            # progressively fresher frames.
+            frame_age = self._capture.last_frame_age()
+            if frame_age is not None and frame_age > MAX_FRAME_AGE:
+                dropped = 0
+                while frame_age is not None and frame_age > MAX_FRAME_AGE:
+                    newer = self._capture.get()
+                    if newer is None:
+                        break
+                    frame = newer
+                    dropped += 1
+                    if dropped > 20:
+                        break
+                    frame_age = self._capture.last_frame_age()
+                if dropped > 0:
+                    logger.debug(
+                        "Dropped %d stale frame(s) to catch up (age=%.2fs)",
+                        dropped, frame_age or 0.0,
+                    )
 
             annotated = frame.copy()
 
@@ -461,7 +489,23 @@ class DetectionPipeline:
                             dispatch_event(vlm_event, zone_action_ids)
 
                 if yolo_detection.yolo_result is not None:
-                    depth_on = self.get_depth_show() or self._any_zone_wants_depth(red_zones)
+                    now_vlm = time.monotonic()
+                    overlapping_now = self._overlapping_zone_indices(yolo_detection.yolo_result, red_zones)
+
+                    # Depth inference is expensive. Run it only when:
+                    #   - the scene explicitly requests continuous depth (debug_depth), OR
+                    #   - reference depths haven't been computed yet and a zone uses depth, OR
+                    #   - a forbidden-class detection currently overlaps a depth-enabled zone.
+                    needs_reference_depth = (
+                        not self._reference_depths_ok
+                        and self._any_zone_wants_depth(red_zones)
+                    )
+                    overlap_depth_zone = any(
+                        red_zones[zi].get("depth_enabled")
+                        for zi in overlapping_now
+                        if zi < len(red_zones)
+                    )
+                    depth_on = cfg.debug_depth or needs_reference_depth or overlap_depth_zone
                     hailo.set_depth_enabled(depth_on)
 
                     if not self._reference_depths_ok:
@@ -469,9 +513,6 @@ class DetectionPipeline:
                         if ready:
                             self._reference_depths = ref_depths
                             self._reference_depths_ok = True
-
-                    now_vlm = time.monotonic()
-                    overlapping_now = self._overlapping_zone_indices(yolo_detection.yolo_result, red_zones)
 
                     for zi in list(self._overlap_since):
                         if zi not in overlapping_now:
@@ -696,6 +737,8 @@ class DetectionPipeline:
             cv2.polylines(annotated, [pts], True, colour, 2, lineType=cv2.LINE_AA)
 
     def _draw_yolo_detection(self, annotated, detection):
+        if detection.yolo_result is None:
+            return
         for det in detection.yolo_result.detections:
             x1 = det.x1
             x2 = det.x2

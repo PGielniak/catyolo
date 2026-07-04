@@ -33,11 +33,29 @@ def _set_thread_name(name: str) -> None:
 
 
 class Hailo8Backend(InferenceBackend):
-    """Hailo-8 backend: YOLO object detection + optional depth. No VLM support."""
+    """Hailo-8 backend: YOLO object detection + optional depth. No VLM support.
+
+    Assumes the YOLO HEF emits a tensor of shape [classes, detections, 5]
+    where each detection is [y1, x1, y2, x2, confidence] in normalized
+    coordinates. If your HEF emits raw feature maps, add the required
+    post-processing before the parsing loop in _run_yolo().
+    """
 
     RELOAD_SETTLE_SECONDS: float = 2.0
     SETUP_TIMEOUT: float = 60.0
     IDLE_SLEEP: float = 0.05
+
+    # HailoRT model creation on a shared VDevice is not thread-safe. Only one
+    # backend may create/configure models at a time when multiple scenes share
+    # the same VDevice.
+    _shared_setup_lock = threading.Lock()
+
+    # HailoRT cannot create/configure models on a shared VDevice while inference
+    # is running. When a backend sets this event, other backends must not launch
+    # new inference jobs; setup waits until all in-flight jobs finish.
+    _shared_vdevice_busy = threading.Event()
+    _active_inference_lock = threading.Lock()
+    _active_inference_count = 0
 
     def __init__(
         self,
@@ -88,10 +106,14 @@ class Hailo8Backend(InferenceBackend):
         self._reference_depths_ready = threading.Event()
 
         has_depth = self._depth_path is not None
+        # Hailo-8 has less memory than Hailo-10H; default to one stream to
+        # avoid OOM/scheduler starvation. Operators can raise this after
+        # benchmarking their specific HEFs.
+        max_streams = max(1, int(os.getenv("HAILO8_MAX_STREAMS", "1")))
         self._capabilities = BackendCapabilities(
             supports_vlm=False,
             supports_depth=has_depth,
-            max_concurrent_streams=3,
+            max_concurrent_streams=max_streams,
         )
 
     @property
@@ -133,7 +155,26 @@ class Hailo8Backend(InferenceBackend):
 
     def _setup(self) -> None:
         if self._shared_device is not None:
-            # Multi-camera path: attach to the VDevice owned by main().
+            # Multi-camera path: pause all inference on the shared VDevice,
+            # wait for in-flight jobs to finish, then serialize model creation.
+            # HailoRT cannot create/configure models while inference is running
+            # on the same VDevice.
+            logger.info("Waiting for shared VDevice setup slot")
+            self._shared_vdevice_busy.set()
+            while True:
+                with self._active_inference_lock:
+                    if Hailo8Backend._active_inference_count == 0:
+                        break
+                time.sleep(0.01)
+            with self._shared_setup_lock:
+                logger.info("Acquired shared VDevice setup slot")
+                self._setup_device_and_models()
+        else:
+            # Legacy/test path: own the VDevice lifecycle.
+            self._setup_device_and_models()
+
+    def _setup_device_and_models(self) -> None:
+        if self._shared_device is not None:
             self._device = self._shared_device
             logger.info("Attaching to shared VDevice (owned by main)")
         else:
@@ -215,6 +256,8 @@ class Hailo8Backend(InferenceBackend):
             self._setup()
         except Exception:
             logger.exception("Hailo8Backend setup failed; thread exiting")
+            if self._shared_device is not None:
+                self._shared_vdevice_busy.clear()
             return
 
         self._setup_complete.set()
@@ -223,7 +266,11 @@ class Hailo8Backend(InferenceBackend):
             self._capabilities.supports_vlm,
             self._capabilities.supports_depth,
         )
-        self._compute_reference_depths()
+        try:
+            self._compute_reference_depths()
+        finally:
+            if self._shared_device is not None:
+                self._shared_vdevice_busy.clear()
 
         while not self._stop_event.is_set():
             frame = self._capture.get()
@@ -242,6 +289,26 @@ class Hailo8Backend(InferenceBackend):
             self._latest = result
 
     def _process(self, frame: np.ndarray) -> HailoResult:
+        if self._shared_device is not None and self._shared_vdevice_busy.is_set():
+            # Another backend is creating models on the shared VDevice. Drop
+            # this frame to avoid NPU contention during model creation.
+            time.sleep(self.IDLE_SLEEP)
+            return HailoResult(yolo_result=None, depth_map=None, vlm_answer=None)
+        return self._counted_inference(self._process_body, frame)
+
+    def _counted_inference(self, fn, *args, **kwargs):
+        """Run an inference function while counting active jobs on the shared VDevice."""
+        if self._shared_device is None:
+            return fn(*args, **kwargs)
+        with self._active_inference_lock:
+            Hailo8Backend._active_inference_count += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            with self._active_inference_lock:
+                Hailo8Backend._active_inference_count -= 1
+
+    def _process_body(self, frame: np.ndarray) -> HailoResult:
         yolo_result = self._run_yolo(frame)
 
         depth_map = None
@@ -271,6 +338,13 @@ class Hailo8Backend(InferenceBackend):
             bindings.output(out_name).set_buffer(np.empty(out_shape, dtype=np.float32))
         self._yolo_configured_infer_model.run([bindings], timeout=1000)
         output = bindings.output(out_name).get_buffer()
+        logger.debug("YOLO output shape: %s dtype=%s", output.shape, output.dtype)
+        if output.ndim != 3 or output.shape[-1] < 5:
+            raise RuntimeError(
+                f"Unexpected YOLO output shape {output.shape}; expected "
+                f"[classes, detections, 5] from the Hailo-8 HEF. "
+                f"Check the HEF post-processing."
+            )
 
         detection_result = YoloResult(timestamp=datetime.now())
         for class_id, detections in enumerate(output):
@@ -320,6 +394,7 @@ class Hailo8Backend(InferenceBackend):
             bindings.output(out_name).set_buffer(np.empty(out_shape, dtype=np_dtype))
         self._fastdepth_configured_infer_model.run([bindings], timeout=1000)
         output = bindings.output(out_name).get_buffer()
+        logger.debug("Depth raw output shape: %s dtype=%s", output.shape, output.dtype)
         depth_map = output.squeeze()
         return cv2.resize(depth_map, (original_w, original_h), interpolation=cv2.INTER_LINEAR)
 
@@ -327,6 +402,9 @@ class Hailo8Backend(InferenceBackend):
         if self._reference_image is None or self._red_zones is None or not self._capabilities.supports_depth:
             self._reference_depths_ready.set()
             return
+        return self._counted_inference(self._compute_reference_depths_body)
+
+    def _compute_reference_depths_body(self) -> None:
         try:
             logger.info("Computing reference depth map for %d red zones", len(self._red_zones))
             depth_map = self._run_depth(self._reference_image)

@@ -1,6 +1,6 @@
 // ── Scene ─────────────────────────────────────────────────────────────────────
 
-export type EntityClass = 'person' | 'cat'
+export type EntityClass = 'person' | 'cat' | 'car' | 'bird' | 'dog'
 
 export interface Point {
   x: number
@@ -37,6 +37,7 @@ export interface Scene {
   globalDetectionClasses?: EntityClass[]
   globalDetectionActionIds?: string[]
   globalDetectionCooldownSeconds?: number
+  debugDepth?: boolean
   imageBase64?: string
   imageWidth?: number
   imageHeight?: number

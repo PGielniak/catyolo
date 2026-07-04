@@ -55,6 +55,7 @@ class SceneCreateUpdateRequest(BaseModel):
     global_detection_classes: Optional[list[str]] = None
     global_detection_action_ids: Optional[list[UUID4]] = None
     global_detection_cooldown_seconds: Optional[int] = 60
+    debug_depth: bool = False
 
 
 class SceneDeleteRequest(BaseModel):
@@ -81,6 +82,7 @@ class SceneResponse(BaseModel):
     global_detection_classes: Optional[list[str]] = None
     global_detection_action_ids: Optional[list[UUID4]] = None
     global_detection_cooldown_seconds: Optional[int] = 60
+    debug_depth: bool = False
     version: int = 0
 
 
@@ -102,6 +104,7 @@ def _map_scene(scene, redact: bool = True) -> SceneResponse:
         global_detection_classes=scene.global_detection_classes or [],
         global_detection_action_ids=scene.global_detection_action_ids or [],
         global_detection_cooldown_seconds=scene.global_detection_cooldown_seconds or 60,
+        debug_depth=bool(scene.debug_depth),
         version=scene.version or 0,
     )
 
@@ -166,22 +169,24 @@ def create_scene(scene_request: SceneCreateUpdateRequest, config: SceneRouteConf
                    f"Delete an existing scene before creating a new one.",
         )
     try:
-        scene = config.scene_service.create_scene(
-            scene_name=scene_request.scene_name,
-            camera_ip_address=scene_request.camera_ip_address,
-            camera_port=scene_request.camera_port,
-            camera_username=scene_request.camera_username,
-            camera_password=scene_request.camera_password,
-            image=scene_request.image.image,
-            red_zones=scene_request.red_zones,
-            scene_prompt=scene_request.scene_prompt,
-            scene_prompt_interval=scene_request.scene_prompt_interval,
-            scene_prompt_action_ids=scene_request.scene_prompt_action_ids,
-            global_detection_enabled=scene_request.global_detection_enabled,
-            global_detection_classes=scene_request.global_detection_classes,
-            global_detection_action_ids=scene_request.global_detection_action_ids,
-            global_detection_cooldown_seconds=scene_request.global_detection_cooldown_seconds,
-        )
+            scene = config.scene_service.create_scene(
+                scene_name=scene_request.scene_name,
+                camera_ip_address=scene_request.camera_ip_address,
+                camera_port=scene_request.camera_port,
+                camera_username=scene_request.camera_username,
+                camera_password=scene_request.camera_password,
+                image=scene_request.image.image,
+                red_zones=scene_request.red_zones,
+                scene_prompt=scene_request.scene_prompt,
+                scene_prompt_interval=scene_request.scene_prompt_interval,
+                scene_prompt_action_ids=scene_request.scene_prompt_action_ids,
+                global_detection_enabled=scene_request.global_detection_enabled,
+                global_detection_classes=scene_request.global_detection_classes,
+                global_detection_action_ids=scene_request.global_detection_action_ids,
+                global_detection_cooldown_seconds=scene_request.global_detection_cooldown_seconds,
+                debug_depth=scene_request.debug_depth,
+            )
+
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to create scene: {e}")
     return _map_scene(scene)
@@ -213,6 +218,7 @@ def update_scene(scene_id: UUID4, scene_request: SceneCreateUpdateRequest, confi
         global_detection_classes=scene_request.global_detection_classes,
         global_detection_action_ids=scene_request.global_detection_action_ids,
         global_detection_cooldown_seconds=scene_request.global_detection_cooldown_seconds,
+        debug_depth=scene_request.debug_depth,
     )
     return _map_scene(updated_scene)
 

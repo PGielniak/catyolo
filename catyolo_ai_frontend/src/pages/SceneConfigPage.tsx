@@ -39,6 +39,7 @@ export default function SceneConfigPage({ scene: initialScene, navigate }: Props
     initialScene?.globalDetectionCooldownSeconds?.toString() ?? '60'
   )
   const [showGlobalActionPicker, setShowGlobalActionPicker] = useState(false)
+  const [debugDepth, setDebugDepth] = useState<boolean>(initialScene?.debugDepth ?? false)
   const [imageBase64, setImageBase64] = useState<string | undefined>(initialScene?.imageBase64)
   const [imageWidth, setImageWidth] = useState<number>(initialScene?.imageWidth ?? 0)
   const [imageHeight, setImageHeight] = useState<number>(initialScene?.imageHeight ?? 0)
@@ -110,6 +111,7 @@ export default function SceneConfigPage({ scene: initialScene, navigate }: Props
         globalDetectionCooldownSeconds: globalDetectionCooldownSeconds
           ? parseInt(globalDetectionCooldownSeconds, 10)
           : undefined,
+        debugDepth,
         imageBase64,
         imageWidth: imageWidth || undefined,
         imageHeight: imageHeight || undefined,
@@ -299,7 +301,7 @@ export default function SceneConfigPage({ scene: initialScene, navigate }: Props
                 <div>
                   <span className="text-xs font-medium block mb-1">Trigger classes</span>
                   <div className="flex gap-4">
-                    {(['person', 'cat'] as EntityClass[]).map((c) => (
+                    {(['person', 'cat', 'car', 'bird', 'dog'] as EntityClass[]).map((c) => (
                       <label key={c} className="flex items-center gap-2 cursor-pointer text-sm">
                         <input
                           type="checkbox"
@@ -368,6 +370,23 @@ export default function SceneConfigPage({ scene: initialScene, navigate }: Props
                 </div>
               </div>
             )}
+          </div>
+
+          {/* Debug depth */}
+          <div className="border-t pt-3">
+            <span className="text-sm font-medium">Debug depth</span>
+            <p className="text-xs text-gray-400 mb-2">
+              Run depth inference continuously for this scene, even when no zone overlap requires it. Useful for the debug stream's depth visualization.
+            </p>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={debugDepth}
+                onChange={(e) => setDebugDepth(e.target.checked)}
+                className="w-4 h-4 accent-blue-600"
+              />
+              <span className="text-sm">Enable continuous depth (debug)</span>
+            </label>
           </div>
 
           {saveError && <p className="text-red-600 text-xs">{saveError}</p>}

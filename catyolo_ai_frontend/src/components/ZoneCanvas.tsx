@@ -4,8 +4,11 @@ import type { NormZone, Point, EntityClass, CatyoloAction } from '../types'
 const ENTITY_LABELS: Record<EntityClass, string> = {
   person: 'Person',
   cat: 'Cat',
+  car: 'Car',
+  bird: 'Bird',
+  dog: 'Dog',
 }
-const ALL_CLASSES: EntityClass[] = ['person', 'cat']
+const ALL_CLASSES: EntityClass[] = ['person', 'cat', 'car', 'bird', 'dog']
 
 function pointInPolygon(p: Point, poly: Point[]): boolean {
   if (poly.length < 3) return false

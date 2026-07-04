@@ -22,6 +22,7 @@ class Scene(Base):
     global_detection_classes = Column(JSON, nullable=True)
     global_detection_action_ids = Column(JSON, nullable=True)
     global_detection_cooldown_seconds = Column(Integer, nullable=False, default=60)
+    debug_depth = Column(Integer, nullable=False, default=0)
     version = Column(Integer, nullable=False, default=0)
 
 

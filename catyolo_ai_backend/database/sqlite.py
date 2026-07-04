@@ -53,6 +53,8 @@ class SqliteDatabase:
                 conn.execute("ALTER TABLE scenes ADD COLUMN global_detection_action_ids JSON")
             if 'global_detection_cooldown_seconds' not in cols:
                 conn.execute("ALTER TABLE scenes ADD COLUMN global_detection_cooldown_seconds INTEGER NOT NULL DEFAULT 60")
+            if 'debug_depth' not in cols:
+                conn.execute("ALTER TABLE scenes ADD COLUMN debug_depth INTEGER NOT NULL DEFAULT 0")
             if 'version' not in cols:
                 conn.execute("ALTER TABLE scenes ADD COLUMN version INTEGER NOT NULL DEFAULT 0")
             if 'action_ids' in cols:

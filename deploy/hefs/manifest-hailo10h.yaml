@@ -1,0 +1,21 @@
+# Hailo-10H HEF manifest for CatYolo.
+# Paths are relative to the per-arch HEF directory.
+# URLs point at the GitHub Release assets; update the tag as needed.
+
+yolo:
+  path: yolov11x.hef
+  url: https://github.com/PGielniak/catyolo/releases/download/hefs-v1/hailo10h/yolov11x.hef
+  sha256: 94388a361c02e525c06f948f27741a332062906f39ff2d8f0725d7fa2100fdf3
+  description: YOLO object detection
+
+depth:
+  path: depth_anything_v2_vits.hef
+  url: https://github.com/PGielniak/catyolo/releases/download/hefs-v1/hailo10h/depth_anything_v2_vits.hef
+  sha256: 54e454d4406042451712feaff480c60abed885bb6d02435979894c1c7ed04535
+  description: Monocular depth estimation
+
+vlm:
+  path: Qwen3-VL-2B-Instruct.hef
+  url: https://github.com/PGielniak/catyolo/releases/download/hefs-v1/hailo10h/Qwen3-VL-2B-Instruct.hef
+  sha256: 3e302b1d0bdc4beaf4ff982cb34f18bc957d3acd1e20e275eb0dd3536b3043a7
+  description: Qwen3-VL vision-language model

@@ -15,6 +15,53 @@ logger = logging.getLogger(__name__)
 _SUPPORTED_ARCHS = ("hailo10h", "hailo8")
 
 
+class NoHailoDeviceError(RuntimeError):
+    """Raised when the Hailo SDK is missing or no Hailo device is present."""
+
+
+def probe_hailo_devices() -> tuple[list[str], Optional[str]]:
+    """Return (device_ids, probed_arch) for the local Hailo hardware.
+
+    Raises NoHailoDeviceError if the Hailo SDK is not installed or if the
+    device scan returns no devices. The architecture probe uses hailortcli
+    when available and falls back to None.
+
+    Lazy-imports hailo_platform so the module imports cleanly on dev
+    machines / CI without a Hailo chip.
+    """
+    try:
+        from hailo_platform import Device
+    except Exception as e:
+        raise NoHailoDeviceError(
+            "hailo_platform is not installed; Hailo SDK is missing"
+        ) from e
+
+    with Device() as dev:
+        device_ids = dev.scan()
+    logger.info("Available Hailo devices: %s", device_ids)
+
+    if not device_ids:
+        raise NoHailoDeviceError("No Hailo devices found")
+
+    probed_arch: Optional[str] = None
+    try:
+        result = subprocess.run(
+            ["hailortcli", "fw-control", "identify"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        output = (result.stdout + result.stderr).lower()
+        if "hailo10h" in output or "hailo-10h" in output:
+            probed_arch = "hailo10h"
+        elif "hailo8" in output or "hailo-8" in output:
+            probed_arch = "hailo8"
+    except Exception:
+        logger.debug("Could not probe Hailo architecture via hailortcli", exc_info=True)
+
+    return device_ids, probed_arch
+
+
 def create_shared_device() -> Any:
     """Create ONE VDevice shared across all per-scene backends.
 
@@ -25,15 +72,18 @@ def create_shared_device() -> Any:
     backends attach to this shared device and only own their per-backend
     model handles (released on reload/teardown, leaving the device open).
 
-    Lazy-imports hailo_platform so the module imports cleanly on dev
-    machines / CI without a Hailo chip.
+    Probes for the presence of a Hailo device first and raises
+    NoHailoDeviceError if none is found.
     """
     from hailo_platform import HailoSchedulingAlgorithm, VDevice
 
+    device_ids, _ = probe_hailo_devices()
     params = VDevice.create_params()
     params.scheduling_algorithm = HailoSchedulingAlgorithm.ROUND_ROBIN
     params.group_id = "SHARED"
-    logger.info("Created shared VDevice (ROUND_ROBIN / SHARED)")
+    logger.info(
+        "Created shared VDevice for devices %s (ROUND_ROBIN / SHARED)", device_ids
+    )
     return VDevice(params)
 
 
@@ -96,22 +146,21 @@ def create_backend(
 
 
 def _probe_arch() -> str:
-    """Identify the Hailo chip via hailortcli. Falls back to hailo10h on error."""
+    """Identify the Hailo chip. Falls back to hailo10h on error."""
     try:
-        result = subprocess.run(
-            ["hailortcli", "fw-control", "identify"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        output = result.stdout + result.stderr
-        if "hailo10h" in output.lower() or "hailo-10h" in output.lower():
+        _, probed_arch = probe_hailo_devices()
+        if probed_arch == "hailo10h":
             logger.info("Detected Hailo-10H")
             return "hailo10h"
-        if "hailo8" in output.lower() or "hailo-8" in output.lower():
+        if probed_arch == "hailo8":
             logger.info("Detected Hailo-8")
             return "hailo8"
-        logger.warning("hailortcli output did not identify arch; defaulting to hailo10h")
+        logger.warning(
+            "hailortcli output did not identify arch; defaulting to hailo10h"
+        )
+        return "hailo10h"
+    except NoHailoDeviceError as e:
+        logger.warning("Could not probe Hailo arch (%s); defaulting to hailo10h", e)
         return "hailo10h"
     except Exception as e:
         logger.warning("Could not probe Hailo arch (%s); defaulting to hailo10h", e)

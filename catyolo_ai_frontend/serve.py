@@ -6,9 +6,10 @@ import os
 import socket
 import socketserver
 
-FRONTEND_PORT = 3100
+FRONTEND_PORT = int(os.environ.get('FRONTEND_PORT', '3100'))
 BACKEND_PORT = int(os.environ.get('BACKEND_PORT', '8100'))
-DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dist')
+DIST = os.environ.get('FRONTEND_DIST', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dist'))
+os.makedirs(DIST, exist_ok=True)
 
 # Paths that are proxied to the backend instead of served as static files
 API_PREFIXES = ('/scene/', '/action/', '/log/', '/api_key/', '/frame')

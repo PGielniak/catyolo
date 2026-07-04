@@ -119,6 +119,9 @@ class SceneConfig:
     global_detection_cooldown_seconds: int = 60
     forbidden_classes: list[str] = field(default_factory=lambda: ["cat"])
     version: int = 0
+    # Run depth inference continuously for this scene, even when no zone
+    # overlap requires it. Useful for debug-stream depth visualization.
+    debug_depth: bool = False
     # RTSP URL built from the scene's camera_* fields (single source of
     # truth; supersedes the old RTSP_URL env var). Empty when the scene has
     # no camera_ip_address.
@@ -145,5 +148,6 @@ class SceneConfig:
             global_detection_cooldown_seconds=int(scene.get("global_detection_cooldown_seconds") or 60),
             forbidden_classes=_union_classes(raw_zones),
             version=int(scene.get("version") or 0),
+            debug_depth=bool(scene.get("debug_depth")),
             rtsp_url=build_rtsp_url(scene),
         )

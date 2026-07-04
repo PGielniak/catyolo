@@ -45,6 +45,25 @@ class Hailo10Backend(InferenceBackend):
     DEFAULT_VLM_PROMPT = "Is the {class} attacking a plant?"
     GLOBAL_DESCRIPTION_PROMPT = "Describe what you see in this image in one sentence."
 
+    # HailoRT model creation on a shared VDevice is not thread-safe. Only one
+    # backend may create/configure models at a time when multiple scenes share
+    # the same VDevice.
+    _shared_setup_lock = threading.Lock()
+
+    # Hailo-10H has a single KV-Cache that can be bound to only one VLM model.
+    # Share one VLM instance across all backends that use the same shared VDevice
+    # and serialize inference on it so concurrent scenes don't corrupt context.
+    _shared_vlm: Optional[Any] = None
+    _shared_vlm_lock = threading.Lock()
+    _shared_vlm_refcount = 0
+
+    # HailoRT cannot create/configure models on a shared VDevice while inference
+    # is running. When a backend sets this event, other backends must not launch
+    # new inference jobs; setup waits until all in-flight jobs finish.
+    _shared_vdevice_busy = threading.Event()
+    _active_inference_lock = threading.Lock()
+    _active_inference_count = 0
+
     def __init__(
         self,
         capture: FrameCapture,
@@ -231,7 +250,26 @@ class Hailo10Backend(InferenceBackend):
 
     def _setup(self) -> None:
         if self._shared_device is not None:
-            # Multi-camera path: attach to the VDevice owned by main().
+            # Multi-camera path: pause all inference on the shared VDevice,
+            # wait for in-flight jobs to finish, then serialize model creation.
+            # HailoRT cannot create/configure models while inference is running
+            # on the same VDevice.
+            logger.info("Waiting for shared VDevice setup slot")
+            self._shared_vdevice_busy.set()
+            while True:
+                with self._active_inference_lock:
+                    if Hailo10Backend._active_inference_count == 0:
+                        break
+                time.sleep(0.01)
+            with self._shared_setup_lock:
+                logger.info("Acquired shared VDevice setup slot")
+                self._setup_device_and_models()
+        else:
+            # Legacy/test path: own the VDevice lifecycle.
+            self._setup_device_and_models()
+
+    def _setup_device_and_models(self) -> None:
+        if self._shared_device is not None:
             self._device = self._shared_device
             logger.info("Attaching to shared VDevice (owned by main)")
         else:
@@ -297,9 +335,25 @@ class Hailo10Backend(InferenceBackend):
             return
         try:
             from hailo_platform.genai import VLM
-            logger.info("Loading VLM from %s", self._vlm_path)
-            self._vlm = VLM(self._device, str(self._vlm_path))
-            logger.info("VLM configured")
+            if self._shared_device is not None:
+                # Multi-camera path: the Hailo-10H KV-Cache can only be bound to
+                # one VLM model, so all backends share a single VLM instance.
+                with self._shared_vlm_lock:
+                    if Hailo10Backend._shared_vlm is None:
+                        logger.info("Loading shared VLM from %s", self._vlm_path)
+                        Hailo10Backend._shared_vlm = VLM(
+                            self._device, str(self._vlm_path)
+                        )
+                        logger.info("Shared VLM configured")
+                    else:
+                        logger.info("Reusing shared VLM instance")
+                    Hailo10Backend._shared_vlm_refcount += 1
+                    self._vlm = Hailo10Backend._shared_vlm
+            else:
+                # Legacy/test path: each backend owns its VLM.
+                logger.info("Loading VLM from %s", self._vlm_path)
+                self._vlm = VLM(self._device, str(self._vlm_path))
+                logger.info("VLM configured")
         except Exception as e:
             logger.error("Error setting up VLM: %s", e)
             self._vlm = None
@@ -310,7 +364,6 @@ class Hailo10Backend(InferenceBackend):
 
     def _teardown(self) -> None:
         for attr in (
-            "_vlm",
             "_yolo_configured_infer_model",
             "_yolo_infer_model",
             "_depth_configured_infer_model",
@@ -320,15 +373,44 @@ class Hailo10Backend(InferenceBackend):
                 obj = getattr(self, attr, None)
                 if obj is None:
                     continue
-                if attr == "_vlm" and hasattr(obj, "release"):
-                    try:
-                        obj.release()
-                    except Exception:
-                        logger.debug("Ignored error releasing %s", attr, exc_info=True)
                 del obj
                 setattr(self, attr, None)
             except Exception:
                 logger.exception("Error releasing %s", attr)
+
+        # Release VLM. On the shared-device path this is a process-wide singleton,
+        # so we only release it when the last backend using it is torn down.
+        if self._vlm is not None:
+            try:
+                if self._shared_device is not None:
+                    with self._shared_vlm_lock:
+                        Hailo10Backend._shared_vlm_refcount -= 1
+                        if Hailo10Backend._shared_vlm_refcount <= 0:
+                            if (
+                                Hailo10Backend._shared_vlm is not None
+                                and hasattr(Hailo10Backend._shared_vlm, "release")
+                            ):
+                                try:
+                                    Hailo10Backend._shared_vlm.release()
+                                except Exception:
+                                    logger.debug(
+                                        "Ignored error releasing shared VLM",
+                                        exc_info=True,
+                                    )
+                            Hailo10Backend._shared_vlm = None
+                            Hailo10Backend._shared_vlm_refcount = 0
+                else:
+                    if hasattr(self._vlm, "release"):
+                        try:
+                            self._vlm.release()
+                        except Exception:
+                            logger.debug(
+                                "Ignored error releasing VLM", exc_info=True
+                            )
+            except Exception:
+                logger.exception("Error releasing VLM")
+            finally:
+                self._vlm = None
 
         try:
             if self._device is not None and self._owns_device:
@@ -350,6 +432,8 @@ class Hailo10Backend(InferenceBackend):
             self._setup()
         except Exception:
             logger.exception("Hailo10Backend setup failed; thread exiting")
+            if self._shared_device is not None:
+                self._shared_vdevice_busy.clear()
             return
 
         self._setup_complete.set()
@@ -358,7 +442,11 @@ class Hailo10Backend(InferenceBackend):
             self._capabilities.supports_vlm,
             self._capabilities.supports_depth,
         )
-        self._compute_reference_depths()
+        try:
+            self._compute_reference_depths()
+        finally:
+            if self._shared_device is not None:
+                self._shared_vdevice_busy.clear()
 
         while not self._stop_event.is_set():
             frame = self._capture.get()
@@ -377,6 +465,26 @@ class Hailo10Backend(InferenceBackend):
             self._latest = result
 
     def _process(self, frame: np.ndarray) -> HailoResult:
+        if self._shared_device is not None and self._shared_vdevice_busy.is_set():
+            # Another backend is creating models on the shared VDevice. Drop
+            # this frame to avoid NPU contention during model creation.
+            time.sleep(self.IDLE_SLEEP)
+            return HailoResult(yolo_result=None, depth_map=None, vlm_answer=None)
+        return self._counted_inference(self._process_body, frame)
+
+    def _counted_inference(self, fn, *args, **kwargs):
+        """Run an inference function while counting active jobs on the shared VDevice."""
+        if self._shared_device is None:
+            return fn(*args, **kwargs)
+        with self._active_inference_lock:
+            Hailo10Backend._active_inference_count += 1
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            with self._active_inference_lock:
+                Hailo10Backend._active_inference_count -= 1
+
+    def _process_body(self, frame: np.ndarray) -> HailoResult:
         yolo_result = self._run_yolo(frame)
 
         depth_map = None
@@ -562,17 +670,20 @@ class Hailo10Backend(InferenceBackend):
             ]},
         ]
 
-        self._vlm.clear_context()
-        try:
-            response = self._vlm.generate_all(
-                prompt=prompt,
-                frames=[image],
-                temperature=0.1,
-                max_generated_tokens=max_tokens,
-            )
-        except Exception:
+        # Serialize VLM inference across all backends. The Hailo-10H VLM holds
+        # the single KV-Cache, so only one generate_all() call can run at a time.
+        with self._shared_vlm_lock:
             self._vlm.clear_context()
-            raise
+            try:
+                response = self._vlm.generate_all(
+                    prompt=prompt,
+                    frames=[image],
+                    temperature=0.1,
+                    max_generated_tokens=max_tokens,
+                )
+            except Exception:
+                self._vlm.clear_context()
+                raise
 
         answer_text = re.sub(r"<think>.*?</think>", "", response, flags=re.DOTALL)
         answer_text = answer_text.split("<|im_end|>")[0].split("<|endoftext|>")[0].strip()
@@ -599,6 +710,9 @@ class Hailo10Backend(InferenceBackend):
         if self._reference_image is None or self._red_zones is None or not self._capabilities.supports_depth:
             self._reference_depths_ready.set()
             return
+        return self._counted_inference(self._compute_reference_depths_body)
+
+    def _compute_reference_depths_body(self) -> None:
         try:
             logger.info("Computing reference depth map for %d red zones", len(self._red_zones))
             depth_map = self._run_depth(self._reference_image)

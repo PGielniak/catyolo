@@ -1,0 +1,16 @@
+# Hailo-8 HEF manifest for CatYolo.
+# Paths are relative to the per-arch HEF directory.
+# URLs point at the GitHub Release assets; update the tag as needed.
+
+yolo:
+  path: yolov8s.hef
+  url: https://github.com/PGielniak/catyolo/releases/download/hefs-v1/hailo8/yolov8s.hef
+  sha256: 3cc9ddd06061a3c1f7db8bb99fd48004d9e01ce89effcd02edec93e93d7f3907
+  description: YOLO object detection
+
+# depth: omitted — no Hailo-8 depth HEF is bundled yet.
+# When ready, add:
+#   depth:
+#     path: scdepthv3_hailo8.hef
+#     url: https://github.com/PGielniak/catyolo/releases/download/hefs-v1/hailo8/scdepthv3_hailo8.hef
+#     sha256: ...
