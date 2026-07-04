@@ -500,7 +500,7 @@ configure_env() {
         ENABLE_SAMPLE_SAVER="false"
     fi
 
-    if prompt_yn "Skip auth in frontend (VITE_SKIP_AUTH)?" n; then
+    if prompt_yn "Skip API key auth in frontend and backend (SKIP_AUTH)?" n; then
         SKIP_AUTH="true"
     else
         SKIP_AUTH="false"
