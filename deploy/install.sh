@@ -589,9 +589,36 @@ verify_services() {
     else
         report_missing "worker /healthz not reachable"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# Access summary
+# ---------------------------------------------------------------------------
+print_access_summary() {
+    local ip host
+    ip=$(hostname -I | awk '{print $1}')
+    host=$(hostname)
+
+    local backend_port="${BACKEND_PORT:-$DEFAULT_BACKEND_PORT}"
+    local frontend_port="${FRONTEND_PORT:-$DEFAULT_FRONTEND_PORT}"
+    local worker_port="${WORKER_STREAM_PORT:-$DEFAULT_WORKER_STREAM_PORT}"
 
     echo
-    info "Frontend should be available at: http://${ip}:${FRONTEND_PORT:-$DEFAULT_FRONTEND_PORT}"
+    echo "==============================================================================="
+    echo "                          CatYolo access URLs"
+    echo "==============================================================================="
+    echo
+    echo "  Hostname : $host"
+    echo "  IP       : $ip"
+    echo
+    echo "  Frontend        : http://${host}:${frontend_port}"
+    echo "                    http://${ip}:${frontend_port}"
+    echo "  Backend API     : http://${ip}:${backend_port}"
+    echo "  Backend health  : http://${ip}:${backend_port}/healthz"
+    echo "  Worker stream   : http://${ip}:${worker_port}"
+    echo "  Worker health   : http://${ip}:${worker_port}/healthz"
+    echo
+    echo "==============================================================================="
 }
 
 # ---------------------------------------------------------------------------
@@ -615,6 +642,7 @@ main() {
     install_systemd_units
     verify_services
     print_report
+    print_access_summary
 }
 
 main "$@"
