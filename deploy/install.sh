@@ -572,6 +572,11 @@ configure_env() {
     chown "$CATYOLO_USER:$CATYOLO_GROUP" "$CONFIG_DIR/worker.env"
     chmod 640 "$CONFIG_DIR/worker.env"
 
+    # The database file was created above by root (via uv run). Make sure the
+    # backend service user can read/write it.
+    chown "$CATYOLO_USER:$CATYOLO_GROUP" "$DATABASE_PATH"
+    chmod 640 "$DATABASE_PATH"
+
     report_installed "API key for worker"
     info "API key created. It is stored in $CONFIG_DIR/worker.env"
 }
@@ -657,6 +662,18 @@ print_access_summary() {
     echo "  Backend health  : http://${ip}:${backend_port}/healthz"
     echo "  Worker stream   : http://${ip}:${worker_port}"
     echo "  Worker health   : http://${ip}:${worker_port}/healthz"
+
+    if [[ "${SKIP_AUTH:-false}" != "true" ]]; then
+        echo
+        echo "  API Key         : ${API_KEY:-<not generated>}"
+        echo "  Stored in       : ${CONFIG_DIR:-/etc/catyolo}/worker.env"
+        echo
+        echo "  Use this key when the frontend setup page asks for it."
+    else
+        echo
+        echo "  Auth is disabled (SKIP_AUTH=true)."
+    fi
+
     echo
     echo "==============================================================================="
 }
