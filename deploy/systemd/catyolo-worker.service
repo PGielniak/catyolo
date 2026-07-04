@@ -11,7 +11,6 @@ Group=${CATYOLO_GROUP}
 WorkingDirectory=${REPO_INSTALL_DIR}/catyolo_ai_worker
 EnvironmentFile=${CONFIG_DIR}/worker.env
 Environment=PATH=${REPO_INSTALL_DIR}/catyolo_ai_worker/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-Environment=PYTHONPATH=${HAILO_PYTHONPATH}
 ExecStart=${REPO_INSTALL_DIR}/catyolo_ai_worker/.venv/bin/worker
 Restart=on-failure
 RestartSec=5

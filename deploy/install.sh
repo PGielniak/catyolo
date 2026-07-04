@@ -205,18 +205,6 @@ check_hailo() {
     detect_hailo_chip
     info "Hailo SDK found: $HAILO_VERSION"
     info "Detected Hailo chip: $HAILO_CHIP"
-
-    # The worker runs in an isolated uv venv, but Hailo's Python packages
-    # (hailo_platform, etc.) are installed system-wide. Capture their path
-    # so the systemd unit can add it to PYTHONPATH.
-    HAILO_PYTHONPATH=$(python3 - <<PY
-import os, hailo_platform
-print(os.path.dirname(os.path.dirname(hailo_platform.__file__)))
-PY
-    )
-    export HAILO_PYTHONPATH
-    info "Hailo Python package path: $HAILO_PYTHONPATH"
-
     report_installed "Hailo SDK ($HAILO_VERSION, chip=$HAILO_CHIP)"
 }
 
@@ -393,6 +381,56 @@ PY
 # ---------------------------------------------------------------------------
 # Python / Node dependencies
 # ---------------------------------------------------------------------------
+link_hailo_sdk_into_worker_venv() {
+    info "Linking Hailo SDK into worker venv..."
+
+    local venv_site_packages
+    venv_site_packages=$(find "$REPO_INSTALL_DIR/catyolo_ai_worker/.venv/lib" -name site-packages -type d | head -n1)
+
+    if [[ -z "$venv_site_packages" || ! -d "$venv_site_packages" ]]; then
+        warn "Worker venv site-packages not found; skipping Hailo SDK link"
+        return
+    fi
+
+    # Find where Hailo packages live in system Python
+    local system_pkg_dir
+    system_pkg_dir=$(python3 - <<PY
+import sys, os
+for p in sys.path:
+    platform_path = os.path.join(p, 'hailo_platform')
+    if os.path.isdir(platform_path) or os.path.isfile(platform_path):
+        print(p)
+        break
+PY
+    )
+
+    if [[ -z "$system_pkg_dir" ]]; then
+        warn "Could not find hailo_platform in system Python path"
+        return
+    fi
+
+    info "Found Hailo SDK packages at $system_pkg_dir"
+
+    # Symlink every hailo* package/file into the venv so the isolated
+    # environment can import Hailo without pulling in the system's older
+    # dependencies (e.g. typing_extensions).
+    local linked=0
+    for pkg in "$system_pkg_dir"/hailo*; do
+        [[ -e "$pkg" ]] || continue
+        local basename
+        basename=$(basename "$pkg")
+        local target="$venv_site_packages/$basename"
+
+        if [[ -e "$target" || -L "$target" ]]; then
+            rm -rf "$target"
+        fi
+        ln -s "$pkg" "$target"
+        linked=$((linked + 1))
+    done
+
+    report_installed "Hailo SDK linked into worker venv ($linked packages)"
+}
+
 install_python_deps() {
     info "Installing backend Python dependencies..."
     uv sync --project "$REPO_INSTALL_DIR/catyolo_ai_backend"
@@ -401,6 +439,8 @@ install_python_deps() {
     info "Installing worker Python dependencies..."
     uv sync --project "$REPO_INSTALL_DIR/catyolo_ai_worker"
     report_installed "worker Python dependencies"
+
+    link_hailo_sdk_into_worker_venv
 }
 
 install_frontend_deps() {
