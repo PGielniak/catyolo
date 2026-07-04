@@ -1,0 +1,9 @@
+hailort.log
+ROADMAP.md
+.opencode/
+architecture/
+.mypy_cache
+.pytest_cache
+.vscode
+var/
+.python-version
