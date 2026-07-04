@@ -205,6 +205,18 @@ check_hailo() {
     detect_hailo_chip
     info "Hailo SDK found: $HAILO_VERSION"
     info "Detected Hailo chip: $HAILO_CHIP"
+
+    # The worker runs in an isolated uv venv, but Hailo's Python packages
+    # (hailo_platform, etc.) are installed system-wide. Capture their path
+    # so the systemd unit can add it to PYTHONPATH.
+    HAILO_PYTHONPATH=$(python3 - <<PY
+import os, hailo_platform
+print(os.path.dirname(os.path.dirname(hailo_platform.__file__)))
+PY
+    )
+    export HAILO_PYTHONPATH
+    info "Hailo Python package path: $HAILO_PYTHONPATH"
+
     report_installed "Hailo SDK ($HAILO_VERSION, chip=$HAILO_CHIP)"
 }
 
@@ -278,6 +290,27 @@ clone_repo() {
 }
 
 # ---------------------------------------------------------------------------
+# HEF helpers
+# ---------------------------------------------------------------------------
+# Compares a file's SHA256 to an expected value.
+# Prints: "ok" | "bad" | "none" (no expected checksum provided)
+check_hef_sha256() {
+    local file=$1
+    local expected=$2
+    if [[ -z "$expected" || "$expected" == "REPLACE_WITH_SHA256" ]]; then
+        echo "none"
+        return
+    fi
+    local computed
+    computed=$(sha256sum "$file" | awk '{print $1}')
+    if [[ "$computed" == "$expected" ]]; then
+        echo "ok"
+    else
+        echo "bad"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # HEF download / verification
 # ---------------------------------------------------------------------------
 setup_hefs() {
@@ -317,23 +350,38 @@ PY
         local dest="$arch_dir/$path"
 
         if [[ -f "$dest" ]]; then
-            info "HEF already present: $path"
-            existing=$((existing + 1))
-        else
-            info "Downloading HEF: $path ..."
-            curl -fsSL -C - -o "$dest" "$url"
-            chown "$CATYOLO_USER:$CATYOLO_GROUP" "$dest"
-            downloaded=$((downloaded + 1))
+            local status
+            status=$(check_hef_sha256 "$dest" "$sha")
+            if [[ "$status" == "ok" ]]; then
+                info "HEF already present and verified: $path"
+                existing=$((existing + 1))
+                continue
+            elif [[ "$status" == "bad" ]]; then
+                warn "HEF exists but checksum mismatch for $path; re-downloading..."
+                rm -f "$dest"
+            else
+                info "HEF already present (no checksum): $path"
+                existing=$((existing + 1))
+                continue
+            fi
         fi
 
-        if [[ -n "$sha" && "$sha" != "REPLACE_WITH_SHA256" ]]; then
-            local computed
-            computed=$(sha256sum "$dest" | awk '{print $1}')
-            if [[ "$computed" != "$sha" ]]; then
-                error "SHA256 mismatch for $path: expected $sha, got $computed"
-                exit 1
-            fi
+        info "Downloading HEF: $path ..."
+        if [[ -t 1 ]]; then
+            curl -fsSL -C - --progress-bar -o "$dest" "$url"
+        else
+            curl -fsSL -C - -o "$dest" "$url"
+        fi
+        chown "$CATYOLO_USER:$CATYOLO_GROUP" "$dest"
+        downloaded=$((downloaded + 1))
+
+        local status
+        status=$(check_hef_sha256 "$dest" "$sha")
+        if [[ "$status" == "ok" ]]; then
             info "SHA256 verified: $path"
+        elif [[ "$status" == "bad" ]]; then
+            error "SHA256 mismatch for $path: expected $sha"
+            exit 1
         else
             warn "No SHA256 recorded for $path; skipping checksum verification"
         fi
@@ -362,6 +410,9 @@ install_frontend_deps() {
         npm ci
         npm run build
     )
+    # npm runs as root during install, so the dist folder ends up root-owned.
+    # The frontend service needs to write runtime config.json here.
+    chown -R "$CATYOLO_USER:$CATYOLO_GROUP" "$REPO_INSTALL_DIR/catyolo_ai_frontend/dist"
     report_installed "frontend built"
 }
 
