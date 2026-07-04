@@ -54,6 +54,7 @@ On the target device, run as root:
 
 ```bash
 git clone https://github.com/PGielniak/catyolo.git /opt/catyolo
+chmod +x /opt/catyolo/deploy/install.sh
 sudo /opt/catyolo/deploy/install.sh
 ```
 

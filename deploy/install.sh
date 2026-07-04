@@ -149,7 +149,6 @@ install_system_packages() {
         wget
         ca-certificates
         gnupg
-        software-properties-common
         gettext-base
         python3
         python3-venv
