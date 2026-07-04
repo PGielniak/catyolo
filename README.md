@@ -37,18 +37,43 @@ See `architecture/` for detailed docs:
 
 ## Requirements
 
-- Raspberry Pi 5 or generic aarch64 Debian/Ubuntu machine
-- Hailo-10H or Hailo-8 accelerator with HailoRT installed
-- Python 3.13+
-- Node.js 20 LTS
-- Hailo SDK:
-  - `hailort`
-  - `hailort-pcie-driver`
-  - `hailo_platform` Python package
+- Raspberry Pi 5 
+- Hailo 10H (AI Hat 2+) - Hailo8 will also be supported soon though without VLM capabilities
 
-The installer checks for the Hailo SDK and, if missing, prints a link to the Hailo developer downloads page so you can install the correct version for your device.
+
+## Installing prerequisites
+
+Walk through the following steps manually on the target device - you'll have to reboot twice, that's why it's not included in the automatic script.
+
+```bash
+
+# Step 1 — Add Hailo repository
+sudo tee /etc/apt/sources.list.d/hailo.sources <<EOF
+Types: deb
+URIs: https://hailo:chahy5Zo@extranet.raspberrypi.org/hailo
+Suites: trixie
+Components: main
+Signed-By: /usr/share/keyrings/raspberrypi-archive-keyring.gpg
+EOF
+
+sudo apt update && sudo apt full-upgrade -y && sudo reboot
+
+# Step 2 — DKMS FIRST, then hailo-h10-all (order matters!)
+sudo apt install dkms
+sudo apt install hailo-h10-all
+sudo reboot
+
+# Step 3 — Verify
+hailortcli scan
+# Expected: [-] Device: 0001:01:00.0
+
+
+```
+
 
 ## Installation
+
+
 
 On the target device, run as root:
 
