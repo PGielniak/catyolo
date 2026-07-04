@@ -137,13 +137,15 @@ curl http://127.0.0.1:5001/healthz
 
 ## HEF assets
 
-HEFs are too large for git. The installer downloads them from a fixed GitHub Releases pattern:
+HEFs are too large for git. The installer downloads them from the URLs listed in `deploy/hefs/manifest-{arch}.yaml`. By default these point to a public S3 bucket:
 
 ```
-https://github.com/PGielniak/catyolo/releases/download/hefs-v1/{arch}/{filename}
+https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/{arch}/{filename}
 ```
 
-Manifests with filenames, URLs, and SHA256 checksums are in `deploy/hefs/`. You must upload the actual `.hef` files to the `hefs-v1` release before running the installer on a fresh machine.
+Manifests contain filenames, URLs, and SHA256 checksums. The installer downloads missing HEFs, resumes partial downloads, and verifies their checksums.
+
+> Hailo-8 HEFs are not yet bundled. To add support, place `hailo8/yolov8s.hef` in the bucket and update `deploy/hefs/manifest-hailo8.yaml`.
 
 ## Development
 

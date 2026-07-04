@@ -321,7 +321,7 @@ PY
             existing=$((existing + 1))
         else
             info "Downloading HEF: $path ..."
-            curl -fsSL -o "$dest" "$url"
+            curl -fsSL -C - -o "$dest" "$url"
             chown "$CATYOLO_USER:$CATYOLO_GROUP" "$dest"
             downloaded=$((downloaded + 1))
         fi
