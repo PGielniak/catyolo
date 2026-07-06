@@ -3,6 +3,7 @@ import logging
 import os
 import threading
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -57,6 +58,14 @@ class Hailo8Backend(InferenceBackend):
     _active_inference_lock = threading.Lock()
     _active_inference_count = 0
 
+    _DEPTH_TUNING_KEYS = (
+        "depth_diff_threshold",
+        "depth_diff_downsample",
+        "depth_smooth_window",
+        "depth_guided_radius",
+        "depth_guided_eps",
+    )
+
     def __init__(
         self,
         capture: FrameCapture,
@@ -101,6 +110,20 @@ class Hailo8Backend(InferenceBackend):
 
         self._depth_enabled = False
         self._depth_lock = threading.Lock()
+
+        self._depth_smooth_window: int = max(1, int(os.getenv("DEPTH_SMOOTH_WINDOW", "5")))
+        self._depth_buffer: deque = deque(maxlen=self._depth_smooth_window)
+
+        self._depth_diff_threshold: float = float(os.getenv("DEPTH_DIFF_THRESHOLD", "4.0"))
+        self._depth_diff_downsample: int = int(os.getenv("DEPTH_DIFF_DOWNSAMPLE", "8"))
+        self._prev_gray: Optional[np.ndarray] = None
+        self._cached_depth_map: Optional[np.ndarray] = None
+
+        self._depth_guided_radius: int = int(os.getenv("DEPTH_GUIDED_RADIUS", "8"))
+        self._depth_guided_eps: float = float(os.getenv("DEPTH_GUIDED_EPS", "0.01"))
+
+        self._depth_tuning_lock = threading.Lock()
+
 
         self._reference_depths: dict[int, float] = {}
         self._reference_depths_ready = threading.Event()
@@ -148,6 +171,45 @@ class Hailo8Backend(InferenceBackend):
         ready = self._reference_depths_ready.wait(timeout=timeout)
         with self._lock:
             return ready, dict(self._reference_depths)
+
+    def get_depth_tuning(self) -> dict:
+        with self._depth_tuning_lock:
+            return {
+                "depth_diff_threshold": self._depth_diff_threshold,
+                "depth_diff_downsample": self._depth_diff_downsample,
+                "depth_smooth_window": self._depth_smooth_window,
+                "depth_guided_radius": self._depth_guided_radius,
+                "depth_guided_eps": self._depth_guided_eps,
+            }
+
+    def set_depth_tuning(self, params: dict) -> dict:
+        applied: dict = {}
+        with self._depth_tuning_lock:
+            if "depth_diff_threshold" in params:
+                v = float(params["depth_diff_threshold"])
+                if v >= 0:
+                    self._depth_diff_threshold = v
+                    applied["depth_diff_threshold"] = v
+            if "depth_diff_downsample" in params:
+                v = max(1, int(params["depth_diff_downsample"]))
+                self._depth_diff_downsample = v
+                applied["depth_diff_downsample"] = v
+            if "depth_smooth_window" in params:
+                v = max(1, int(params["depth_smooth_window"]))
+                if v != self._depth_smooth_window:
+                    self._depth_smooth_window = v
+                    self._depth_buffer = deque(maxlen=v)
+                applied["depth_smooth_window"] = v
+            if "depth_guided_radius" in params:
+                v = max(1, int(params["depth_guided_radius"]))
+                self._depth_guided_radius = v
+                applied["depth_guided_radius"] = v
+            if "depth_guided_eps" in params:
+                v = float(params["depth_guided_eps"])
+                if v > 0:
+                    self._depth_guided_eps = v
+                    applied["depth_guided_eps"] = v
+        return applied
 
     # ------------------------------------------------------------------ #
     # Setup / teardown
@@ -338,13 +400,20 @@ class Hailo8Backend(InferenceBackend):
             bindings.output(out_name).set_buffer(np.empty(out_shape, dtype=np.float32))
         self._yolo_configured_infer_model.run([bindings], timeout=1000)
         output = bindings.output(out_name).get_buffer()
-        logger.debug("YOLO output shape: %s dtype=%s", output.shape, output.dtype)
-        if output.ndim != 3 or output.shape[-1] < 5:
-            raise RuntimeError(
-                f"Unexpected YOLO output shape {output.shape}; expected "
-                f"[classes, detections, 5] from the Hailo-8 HEF. "
-                f"Check the HEF post-processing."
-            )
+        # HailoRT 4.x returns list[ndarray] for NMS-postprocessed HEFs (e.g. yolov11x);
+        # raw-tensor HEFs return a single ndarray of shape [classes, detections, 5].
+        # The enumerate loop below handles both; only the shape checks differ.
+        if isinstance(output, list):
+            logger.debug("YOLO NMS output: %d class buckets, shape per class: %s",
+                         len(output), output[0].shape if output else "empty")
+        else:
+            logger.debug("YOLO output shape: %s dtype=%s", output.shape, output.dtype)
+            if output.ndim != 3 or output.shape[-1] < 5:
+                raise RuntimeError(
+                    f"Unexpected YOLO output shape {output.shape}; expected "
+                    f"[classes, detections, 5] from the Hailo-8 HEF. "
+                    f"Check the HEF post-processing."
+                )
 
         detection_result = YoloResult(timestamp=datetime.now())
         for class_id, detections in enumerate(output):
@@ -370,7 +439,72 @@ class Hailo8Backend(InferenceBackend):
 
     def _run_depth(self, image: np.ndarray) -> np.ndarray:
         original_h, original_w = image.shape[:2]
-        input_image, _, _, _, _ = letterbox(image, self._fastdepth_desired_h, self._fastdepth_desired_w)
+
+        # Snapshot tuning under the lock so a concurrent set_depth_tuning()
+        # (from the worker debug HTTP endpoint) can't tear a frame.
+        with self._depth_tuning_lock:
+            diff_threshold = self._depth_diff_threshold
+            diff_downsample = self._depth_diff_downsample
+            guided_radius = self._depth_guided_radius
+            guided_eps = self._depth_guided_eps
+            buffer = self._depth_buffer
+
+        # Frame-difference gate: if the scene barely changed since the last
+        # frame, reuse the cached depth map instead of re-running inference.
+        # This is the single biggest flicker killer for a fixed RTSP camera.
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        step = max(1, diff_downsample)
+        gray_small = gray[::step, ::step]
+        reuse = False
+        if (
+            self._prev_gray is not None
+            and self._cached_depth_map is not None
+            and self._prev_gray.shape == gray_small.shape
+        ):
+            diff = cv2.absdiff(gray_small, self._prev_gray)
+            mean_diff = float(diff.mean())
+            reuse = mean_diff < diff_threshold
+            logger.debug("Depth frame-diff mean=%.3f reuse=%s", mean_diff, reuse)
+        self._prev_gray = gray_small
+        if reuse:
+            return self._cached_depth_map
+
+        depth_map = self._run_depth_raw(image)
+        if depth_map is None:
+            return self._cached_depth_map if self._cached_depth_map is not None else None
+
+        # Guided filter: smooth flat depth regions while keeping edges that
+        # align with the RGB image (object boundaries).
+        try:
+            guide = cv2.resize(
+                gray, (original_w, original_h), interpolation=cv2.INTER_AREA,
+            )
+            depth_map = cv2.ximgproc.guidedFilter(
+                guide, depth_map,
+                radius=guided_radius,
+                eps=guided_eps * 255.0 * 255.0,
+            )
+        except Exception:
+            logger.debug("guidedFilter failed, falling back to GaussianBlur", exc_info=True)
+            depth_map = cv2.GaussianBlur(depth_map, (5, 5), 0)
+
+        # Temporal median over the last N frames.
+        if buffer and buffer[0].shape == depth_map.shape:
+            buffer.append(depth_map)
+            if len(buffer) > 1:
+                depth_map = np.median(np.stack(buffer, axis=0), axis=0)
+        else:
+            buffer.clear()
+            buffer.append(depth_map)
+
+        self._cached_depth_map = depth_map
+        return depth_map
+
+    def _run_depth_raw(self, image: np.ndarray) -> Optional[np.ndarray]:
+        original_h, original_w = image.shape[:2]
+        input_image = cv2.resize(
+            image, (self._fastdepth_desired_w, self._fastdepth_desired_h), interpolation=cv2.INTER_AREA,
+        )
 
         if self._fastdepth_c == 4 and input_image.shape[2] == 3:
             h_in, w_in, _ = input_image.shape
@@ -395,7 +529,7 @@ class Hailo8Backend(InferenceBackend):
         self._fastdepth_configured_infer_model.run([bindings], timeout=1000)
         output = bindings.output(out_name).get_buffer()
         logger.debug("Depth raw output shape: %s dtype=%s", output.shape, output.dtype)
-        depth_map = output.squeeze()
+        depth_map = output.squeeze().astype(np.float32)
         return cv2.resize(depth_map, (original_w, original_h), interpolation=cv2.INTER_LINEAR)
 
     def _compute_reference_depths(self) -> None:
