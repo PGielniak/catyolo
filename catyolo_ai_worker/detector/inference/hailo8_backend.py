@@ -102,11 +102,11 @@ class Hailo8Backend(InferenceBackend):
         self._desired_h: Optional[int] = None
         self._desired_w: Optional[int] = None
 
-        self._fastdepth_infer_model = None
-        self._fastdepth_configured_infer_model = None
-        self._fastdepth_desired_h: Optional[int] = None
-        self._fastdepth_desired_w: Optional[int] = None
-        self._fastdepth_c: Optional[int] = None
+        self._depth_infer_model = None
+        self._depth_configured_infer_model = None
+        self._depth_desired_h: Optional[int] = None
+        self._depth_desired_w: Optional[int] = None
+        self._depth_c: Optional[int] = None
 
         self._depth_enabled = False
         self._depth_lock = threading.Lock()
@@ -271,13 +271,13 @@ class Hailo8Backend(InferenceBackend):
 
     def _setup_depth(self) -> None:
         try:
-            self._fastdepth_infer_model = self._device.create_infer_model(str(self._depth_path))
-            input_name = self._fastdepth_infer_model.input_names[0]
-            self._fastdepth_desired_h, self._fastdepth_desired_w, self._fastdepth_c = (
-                self._fastdepth_infer_model.input(input_name).shape
+            self._depth_infer_model = self._device.create_infer_model(str(self._depth_path))
+            input_name = self._depth_infer_model.input_names[0]
+            self._depth_desired_h, self._depth_desired_w, self._depth_c = (
+                self._depth_infer_model.input(input_name).shape
             )
-            self._fastdepth_configured_infer_model = self._fastdepth_infer_model.configure()
-            logger.info("Depth configured (%dx%d)", self._fastdepth_desired_h, self._fastdepth_desired_w)
+            self._depth_configured_infer_model = self._depth_infer_model.configure()
+            logger.info("Depth configured (%dx%d)", self._depth_desired_h, self._depth_desired_w)
         except Exception as e:
             logger.error("Error setting up depth model: %s", e)
             self._capabilities = BackendCapabilities(supports_vlm=False, supports_depth=False)
@@ -286,8 +286,8 @@ class Hailo8Backend(InferenceBackend):
         for attr in (
             "_yolo_configured_infer_model",
             "_yolo_infer_model",
-            "_fastdepth_configured_infer_model",
-            "_fastdepth_infer_model",
+            "_depth_configured_infer_model",
+            "_depth_infer_model",
         ):
             try:
                 obj = getattr(self, attr, None)
@@ -503,21 +503,21 @@ class Hailo8Backend(InferenceBackend):
     def _run_depth_raw(self, image: np.ndarray) -> Optional[np.ndarray]:
         original_h, original_w = image.shape[:2]
         input_image = cv2.resize(
-            image, (self._fastdepth_desired_w, self._fastdepth_desired_h), interpolation=cv2.INTER_AREA,
+            image, (self._depth_desired_w, self._depth_desired_h), interpolation=cv2.INTER_AREA,
         )
 
-        if self._fastdepth_c == 4 and input_image.shape[2] == 3:
+        if self._depth_c == 4 and input_image.shape[2] == 3:
             h_in, w_in, _ = input_image.shape
             padded = np.zeros((h_in, w_in, 4), dtype=np.uint8)
             padded[:, :, :3] = input_image
             input_image = padded
 
         input_data = np.ascontiguousarray(input_image, dtype=np.uint8)
-        bindings = self._fastdepth_configured_infer_model.create_bindings()
-        bindings.input(self._fastdepth_infer_model.input_names[0]).set_buffer(input_data)
-        for out_name in self._fastdepth_infer_model.output_names:
-            out_shape = self._fastdepth_infer_model.output(out_name).shape
-            out_format = self._fastdepth_infer_model.output(out_name).format
+        bindings = self._depth_configured_infer_model.create_bindings()
+        bindings.input(self._depth_infer_model.input_names[0]).set_buffer(input_data)
+        for out_name in self._depth_infer_model.output_names:
+            out_shape = self._depth_infer_model.output(out_name).shape
+            out_format = self._depth_infer_model.output(out_name).format
             type_str = str(out_format.type)
             if "UINT16" in type_str:
                 np_dtype = np.uint16
@@ -526,7 +526,7 @@ class Hailo8Backend(InferenceBackend):
             else:
                 np_dtype = np.uint8
             bindings.output(out_name).set_buffer(np.empty(out_shape, dtype=np_dtype))
-        self._fastdepth_configured_infer_model.run([bindings], timeout=1000)
+        self._depth_configured_infer_model.run([bindings], timeout=1000)
         output = bindings.output(out_name).get_buffer()
         logger.debug("Depth raw output shape: %s dtype=%s", output.shape, output.dtype)
         depth_map = output.squeeze().astype(np.float32)
