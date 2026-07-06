@@ -41,7 +41,7 @@ See `architecture/` for detailed docs:
 - Hailo 10H (AI Hat 2+) - Hailo8 will also be supported soon though without VLM capabilities
 
 
-## Installing prerequisites
+## [ Hailo10h ] Installing prerequisites
 
 Walk through the following steps manually on the target device - you'll have to reboot twice, that's why it's not included in the automatic script.
 
@@ -170,7 +170,7 @@ https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/{arch}/{filename}
 
 Manifests contain filenames, URLs, and SHA256 checksums. The installer downloads missing HEFs, resumes partial downloads, and verifies their checksums.
 
-> Hailo-8 HEFs are not yet bundled. To add support, place `hailo8/yolov8s.hef` in the bucket and update `deploy/hefs/manifest-hailo8.yaml`.
+> Hailo-8 HEFs (YOLO + depth, no VLM) are bundled in the same S3 bucket under `hailo8/` and listed in `deploy/hefs/manifest-hailo8.yaml`. The installer downloads them automatically when a Hailo-8 chip is detected.
 
 ## Development
 
