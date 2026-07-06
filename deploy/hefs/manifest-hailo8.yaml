@@ -1,16 +1,18 @@
 # Hailo-8 HEF manifest for CatYolo.
 # Paths are relative to the per-arch HEF directory.
-# URLs point at the GitHub Release assets; update the tag as needed.
+# URLs point at the public S3 bucket; update them if you move the assets.
+#
+# Note: Hailo-8 has no VLM support — only YOLO and depth are bundled here.
+# The Hailo8Backend hardcodes supports_vlm=False regardless of this manifest.
 
 yolo:
-  path: yolov8s.hef
-  url: https://github.com/PGielniak/catyolo/releases/download/hefs-v1/hailo8/yolov8s.hef
-  sha256: 3cc9ddd06061a3c1f7db8bb99fd48004d9e01ce89effcd02edec93e93d7f3907
+  path: yolov11x.hef
+  url: https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailo8/yolov11x.hef
+  sha256: 7f0843ddb3970f2882fef63762dc7d269cb9e6c2c04e866963b5afb02fd70be2
   description: YOLO object detection
 
-# depth: omitted — no Hailo-8 depth HEF is bundled yet.
-# When ready, add:
-#   depth:
-#     path: scdepthv3_hailo8.hef
-#     url: https://github.com/PGielniak/catyolo/releases/download/hefs-v1/hailo8/scdepthv3_hailo8.hef
-#     sha256: ...
+depth:
+  path: depth_anything_v2_vits.hef
+  url: https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailo8/depth_anything_v2_vits.hef
+  sha256: 366a3a540a62d9b6e9089850250e29fd9cbd7d814139f881ba63d6bb2a6f8b48
+  description: Monocular depth estimation
