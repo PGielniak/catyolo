@@ -41,7 +41,7 @@ See `architecture/` for detailed docs:
 - Hailo 10H (AI Hat 2+) - Hailo8 will also be supported soon though without VLM capabilities
 
 
-## [ Hailo10h ] Installing prerequisites
+##  Installing prerequisites
 
 Walk through the following steps manually on the target device - you'll have to reboot twice, that's why it's not included in the automatic script.
 
@@ -60,7 +60,13 @@ sudo apt update && sudo apt full-upgrade -y && sudo reboot
 
 # Step 2 — DKMS FIRST, then hailo-h10-all (order matters!)
 sudo apt install dkms
+
+### FOR [ HAILO 10 ]run this ###
 sudo apt install hailo-h10-all
+
+### FOR [ HAILO 8 ] run this ###
+sudo apt install hailo-all
+
 sudo reboot
 
 # Step 3 — Verify
@@ -78,8 +84,8 @@ hailortcli scan
 On the target device, run as root:
 
 ```bash
-git clone https://github.com/PGielniak/catyolo.git /opt/catyolo
-chmod +x /opt/catyolo/deploy/install.sh
+sudo git clone https://github.com/PGielniak/catyolo.git /opt/catyolo
+sudo chmod +x /opt/catyolo/deploy/install.sh
 sudo /opt/catyolo/deploy/install.sh
 ```
 
