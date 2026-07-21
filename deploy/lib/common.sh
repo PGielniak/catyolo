@@ -280,6 +280,23 @@ hailo_version_lt() {
     [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" == "$1" ]]
 }
 
+# Returns 0 if the running kernel is >= the supplied major.minor (e.g. 6.15).
+# Reads only the leading numeric part of $(uname -r), ignoring -rpi suffixes.
+kernel_version_ge() {
+    local want_major=$1 want_minor=$2
+    local krel kver k_major k_minor
+    krel=$(uname -r)
+    kver=${krel%%-*}
+    k_major=${kver%%.*}
+    k_minor=${kver#*.}
+    k_minor=${k_minor%%.*}
+    [[ -z "$k_major" || -z "$k_minor" ]] && return 1
+    if [[ "$k_major" -gt "$want_major" ]]; then
+        return 0
+    fi
+    [[ "$k_major" -eq "$want_major" && "$k_minor" -ge "$want_minor" ]]
+}
+
 print_hailo_missing_instructions() {
     echo
     warn "Hailo SDK not found on this system."
@@ -291,7 +308,7 @@ print_hailo_missing_instructions() {
     info "To bootstrap, install DKMS (kernel module builder) first:"
     info "  sudo apt install dkms"
     info ""
-    info "Then download and install HailoRT 5.3.0 from the CatYolo S3 bucket."
+    info "Then download HailoRT 5.3.0 from the CatYolo S3 bucket."
     info "Copy-paste these commands:"
     echo
     local f
@@ -299,16 +316,36 @@ print_hailo_missing_instructions() {
         echo "  curl -fSLO $HAILO_S3_BASE/$f"
     done
     info ""
-    info "Install order: .deb files first, then the .whl:"
-    info "  sudo dpkg -i hailort-pcie-driver_5.3.0_all.deb \\"
-    info "                hailort_5.3.0_arm64.deb \\"
-    info "                hailo_gen_ai_model_zoo_5.3.0_arm64.deb"
-    info "  sudo apt-get install -y -f"
-    info "  sudo pip3 install --break-system-packages hailort-5.3.0-cp313-cp313-linux_aarch64.whl"
+    # Hailo's 5.3.0 driver source calls del_timer_sync(), removed in Linux
+    # 6.15+ (renamed to timer_delete_sync()). On a current Pi kernel (6.18+)
+    # `dpkg -i` of the pcie-driver aborts the postinst mid-DKMS-build. The
+    # safe bootstrap is `dpkg --unpack` + patch + `dpkg --configure`.
+    if kernel_version_ge 6 15; then
+        info "Kernel $(uname -r) >= 6.15 — manual bootstrap must include the del_timer_sync patch:"
+        info "  sudo dpkg --unpack hailort-pcie-driver_5.3.0_all.deb \\"
+        info "                  hailort_5.3.0_arm64.deb \\"
+        info "                  hailo_gen_ai_model_zoo_5.3.0_arm64.deb"
+        info "  sudo sed -i 's/\\bdel_timer_sync\\b/timer_delete_sync/g' \\"
+        info "      /usr/src/hailort-pcie-driver/linux/vdma/monitor.c \\"
+        info "      /usr/src/hailo1x_pci-5.3.0/linux/vdma/monitor.c"
+        info "  sudo dpkg --configure -a"
+        info "  sudo apt-get install -y -f"
+        info "  sudo pip3 install --break-system-packages hailort-5.3.0-cp313-cp313-linux_aarch64.whl"
+        info "  sudo reboot"
+    else
+        info "Install order: .deb files first, then the .whl:"
+        info "  sudo dpkg -i hailort-pcie-driver_5.3.0_all.deb \\"
+        info "                hailort_5.3.0_arm64.deb \\"
+        info "                hailo_gen_ai_model_zoo_5.3.0_arm64.deb"
+        info "  sudo apt-get install -y -f"
+        info "  sudo pip3 install --break-system-packages hailort-5.3.0-cp313-cp313-linux_aarch64.whl"
+        info "  sudo reboot"
+    fi
     info ""
     info "Or — once 'hailortcli' is available from any source — re-run this"
     info "installer; it will auto-upgrade to 5.3.0 from the S3 bucket if the"
-    info "running firmware is older, then prompt you to reboot."
+    info "running firmware is older (and apply the kernel-6.15+ patch"
+    info "automatically), then prompt you to reboot."
     info "After a reboot, re-run this installer to continue CatYolo setup."
     echo
 }

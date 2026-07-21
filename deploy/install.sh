@@ -249,14 +249,57 @@ install_hailo_sdk_5_3_0() {
         fi
     done
 
-    # Install kernel module + firmware first (so userspace has something to
-    # talk to after reboot), then CLI + libhailort, then the genai model zoo.
-    info "Installing HailoRT .deb packages..."
-    DEBIAN_FRONTEND=noninteractive dpkg -i \
+    # Unpack .debs WITHOUT running postinst. The hailort-pcie-driver postinst
+    # triggers a DKMS build against the kernel that's running, so we need to
+    # patch the driver source tree (see below) BEFORE the postinst runs.
+    # `dpkg --unpack` does exactly this; `dpkg --configure` later runs postinst.
+    info "Unpacking HailoRT .deb packages (postinst deferred until source is patched)..."
+    DEBIAN_FRONTEND=noninteractive dpkg --unpack \
         "$work_dir/hailort-pcie-driver_5.3.0_all.deb" \
         "$work_dir/hailort_5.3.0_arm64.deb" \
         "$work_dir/hailo_gen_ai_model_zoo_5.3.0_arm64.deb"
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -f -qq
+
+    # Patch the Hailo PCIe driver source so it builds on Linux >= 6.15.
+    #
+    # Hailo's 5.3.0 driver source calls del_timer_sync(), which was removed
+    # from the kernel in 6.15 (renamed to timer_delete_sync()). On Pi 5 with a
+    # current kernel (6.18+ as of mid-2026), DKMS build fails with:
+    #   ../vdma/monitor.c:53: implicit declaration of function 'del_timer_sync'
+    # and the postinst aborts, leaving hailort-pcie-driver unconfigured.
+    #
+    # The driver package installs TWO source trees (not symlinked):
+    #   /usr/src/hailort-pcie-driver/         ← used by the postinst make build
+    #   /usr/src/hailo1x_pci-5.3.0/           ← used by DKMS
+    # Both must be patched, and the patch must be applied AFTER `dpkg --unpack`
+    # lays down the source, and BEFORE `dpkg --configure` runs the postinst.
+    # sed is idempotent: once timer_delete_sync is in place, the regex no longer
+    # matches, so re-runs are safe.
+    if kernel_version_ge 6 15; then
+        info "Kernel $(uname -r) >= 6.15 — applying del_timer_sync → timer_delete_sync compat patch"
+        local patched=0
+        for src in \
+            /usr/src/hailort-pcie-driver/linux/vdma/monitor.c \
+            /usr/src/hailo1x_pci-5.3.0/linux/vdma/monitor.c; do
+            if [[ -f "$src" ]] && grep -q '\bdel_timer_sync\b' "$src"; then
+                sed -i 's/\bdel_timer_sync\b/timer_delete_sync/g' "$src"
+                info "  patched: $src"
+                patched=$((patched + 1))
+            fi
+        done
+        if [[ "$patched" -eq 0 ]]; then
+            warn "Expected to patch del_timer_sync but no unpatched source found; continuing"
+        fi
+    fi
+
+    # Now run the postinst (DKMS build + module load + firmware load) against
+    # the patched source. Stop CatYolo services first so nothing is holding
+    # /dev/hailo0 — the postinst calls `modprobe -rq` and that fails if the
+    # module is in use, leaving the package in an unconfigured state.
+    info "Configuring HailoRT packages (runs DKMS build + module load)..."
+    systemctl stop catyolo-worker catyolo-backend catyolo-frontend 2>/dev/null || true
+    rmmod hailo1x_pci 2>/dev/null || true
+    DEBIAN_FRONTEND=noninteractive dpkg --configure hailort-pcie-driver hailort hailo-gen-ai-model-zoo
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -f -qq || true
 
     # Install the Python binding into the SYSTEM Python — the worker venv
     # symlinks hailo* packages from there (see link_hailo_sdk_into_worker_venv).
@@ -267,6 +310,26 @@ install_hailo_sdk_5_3_0() {
     else
         pip3 install --force-reinstall "$wheel" 2>/dev/null \
             || pip3 install --break-system-packages --force-reinstall "$wheel"
+    fi
+
+    # The 5.1.1 → 5.3.0 purge above removed the apt-shipped
+    # `python3-hailort` package, which owned
+    # `/usr/lib/python3/dist-packages/hailo.cpython-313-aarch64-linux-gnu.so`.
+    # If the worker venv has stale symlinks pointing there (left from a
+    # previous `link_hailo_sdk_into_worker_venv` run against the 5.1.1 system
+    # path), clean them up now — otherwise the worker will fail to find the
+    # device after the reboot even though hailo_platform itself imports OK.
+    # (link_hailo_sdk_into_worker_venv below also sweeps for dangling symlinks,
+    # but the venv might not exist yet on a fresh install. Run it opportunistically
+    # — explicit `[[ -d ... ]]` guard so it never fails the upgrade.)
+    local venv_site_packages
+    venv_site_packages=$(find "$REPO_INSTALL_DIR/catyolo_ai_worker/.venv/lib" -name site-packages -type d 2>/dev/null | head -n1 || true)
+    if [[ -n "$venv_site_packages" && -d "$venv_site_packages" ]]; then
+        for stale in "$venv_site_packages"/hailo*; do
+            [[ -L "$stale" && ! -e "$stale" ]] || continue
+            warn "  pre-reboot cleanup: removing dangling symlink: $(basename "$stale") -> $(readlink "$stale")"
+            rm -f "$stale"
+        done
     fi
 
     rm -rf "$work_dir"
@@ -512,6 +575,26 @@ PY
 
     info "Found Hailo SDK packages at $system_pkg_dir"
 
+    # Sweep the worker venv for stale/dangling hailo* symlinks BEFORE
+    # re-linking. Once a HailoRT upgrade (e.g. 5.1.1 → 5.3.0) purges the old
+    # apt `python3-hailort` package, the old binary `hailo.cpython-313-*.so`
+    # it shipped at /usr/lib/python3/dist-packages/ is gone, but the worker
+    # venv still has the symlink pointing there — and `ln -s "$pkg" "$target"`
+    # below won't replace it (because the corresponding source file no longer
+    # exists in the new install location, so the for-loop skips it). The
+    # dangling symlink in PYTHONPATH then confuses the worker import and the
+    # VLM/devices appear "not found" even though hailo_platform itself imports
+    # fine. Fix: remove any existing hailo* symlink whose target is missing.
+    local cleaned=0
+    for stale in "$venv_site_packages"/hailo*; do
+        [[ -L "$stale" ]] || continue
+        if [[ ! -e "$stale" ]]; then
+            warn "  removing dangling symlink: $(basename "$stale") -> $(readlink "$stale")"
+            rm -f "$stale"
+            cleaned=$((cleaned + 1))
+        fi
+    done
+
     # Symlink every hailo* package/file into the venv so the isolated
     # environment can import Hailo without pulling in the system's older
     # dependencies (e.g. typing_extensions).
@@ -529,7 +612,7 @@ PY
         linked=$((linked + 1))
     done
 
-    report_installed "Hailo SDK linked into worker venv ($linked packages)"
+    report_installed "Hailo SDK linked into worker venv ($linked packages, $cleaned stale symlinks removed)"
 }
 
 install_python_deps() {
@@ -734,6 +817,25 @@ verify_services() {
         report_installed "worker /healthz reachable"
     else
         report_missing "worker /healthz not reachable"
+        # If the worker isn't reachable AND we're on hailo10h, check whether the
+        # Hailo device actually came up at boot. The Pi 5 + Hailo AI HAT+ rev 01
+        # occasionally fails to train the PCIe link on a cold start: the kernel
+        # module loads but the device firmware load times out
+        # (`Failed activating board -110` in dmesg). A warm reboot usually
+        # recovers it. Surface this as a clear hint instead of "guess by logs".
+        if [[ "$HAILO_CHIP" == "hailo10h" ]]; then
+            if ! command_exists hailortcli; then
+                report_warning "Cannot probe Hailo device — hailortcli not on PATH (worker may be in a degraded state)"
+            elif ! hailortcli scan >/dev/null 2>&1; then
+                report_missing "Hailo device not responding (`hailortcli scan` returns no device)"
+                report_warning "Likely a transient PCIe cold-boot failure on Pi 5 + AI HAT+ rev 01."
+                report_warning "Confirm with: sudo dmesg | grep -iE 'hailo|firmware load failed|Failed activating board'"
+                report_warning "Recover with a warm reboot: sudo reboot"
+                report_warning "If it persists after the reboot, check the AI HAT+ ribbon cable + power supply."
+            else
+                report_warning "Hailo device is present (`hailortcli scan` OK) but worker /healthz not reachable — check journalctl -u catyolo-worker"
+            fi
+        fi
     fi
 }
 

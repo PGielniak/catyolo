@@ -71,7 +71,19 @@ curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailort-5-3-
 curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailort-5-3-0/hailo_gen_ai_model_zoo_5.3.0_arm64.deb
 curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailort-5-3-0/hailort-5.3.0-cp313-cp313-linux_aarch64.whl
 
-sudo dpkg -i hailort-pcie-driver_5.3.0_all.deb hailort_5.3.0_arm64.deb hailo_gen_ai_model_zoo_5.3.0_arm64.deb
+# Hailo's 5.3.0 driver calls del_timer_sync(), removed in Linux >= 6.15
+# (renamed to timer_delete_sync). On a current Pi 5 kernel (6.18+) the
+# package postinst fails mid-DKMS-build, so use --unpack + patch + --configure
+# instead of plain `dpkg -i`. Skip the sed step on kernels < 6.15.
+sudo dpkg --unpack hailort-pcie-driver_5.3.0_all.deb \
+                  hailort_5.3.0_arm64.deb \
+                  hailo_gen_ai_model_zoo_5.3.0_arm64.deb
+if uname -r | awk -F. 'NR==1{exit !($1*1000+$2 >= 6015)}'; then
+    sudo sed -i 's/\bdel_timer_sync\b/timer_delete_sync/g' \
+        /usr/src/hailort-pcie-driver/linux/vdma/monitor.c \
+        /usr/src/hailo1x_pci-5.3.0/linux/vdma/monitor.c
+fi
+sudo dpkg --configure -a
 sudo apt-get install -y -f
 sudo pip3 install --break-system-packages hailort-5.3.0-cp313-cp313-linux_aarch64.whl
 
