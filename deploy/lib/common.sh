@@ -291,11 +291,12 @@ print_hailo_missing_instructions() {
     info "To bootstrap, install DKMS (kernel module builder) first:"
     info "  sudo apt install dkms"
     info ""
-    info "Then download and install HailoRT 5.3.0 from the CatYolo S3 bucket:"
-    info "  $HAILO_S3_BASE/"
+    info "Then download and install HailoRT 5.3.0 from the CatYolo S3 bucket."
+    info "Copy-paste these commands:"
+    echo
     local f
     for f in "${HAILO_S3_FILES[@]}"; do
-        info "    $f"
+        echo "  curl -fSLO $HAILO_S3_BASE/$f"
     done
     info ""
     info "Install order: .deb files first, then the .whl:"

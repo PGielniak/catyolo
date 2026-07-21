@@ -287,6 +287,22 @@ install_hailo_sdk_5_3_0() {
 
  After reboot, re-run this installer to continue CatYolo setup:
    sudo /opt/catyolo/deploy/install.sh
+
+---------------------------------------------------------------------------
+ If anything went wrong with the auto-upgrade, you can re-download and
+ install the 5.3.0 packages manually. Copy-paste the curl commands below
+ and follow the README's manual bootstrap instructions:
+
+EOF
+    local f
+    for f in "${HAILO_S3_FILES[@]}"; do
+        echo "  curl -fSLO $HAILO_S3_BASE/$f"
+    done
+    cat <<EOF
+   sudo dpkg -i hailort-pcie-driver_5.3.0_all.deb hailort_5.3.0_arm64.deb hailo_gen_ai_model_zoo_5.3.0_arm64.deb
+   sudo apt-get install -y -f
+   sudo pip3 install --break-system-packages hailort-5.3.0-cp313-cp313-linux_aarch64.whl
+   sudo reboot
 ===============================================================================
 EOF
     print_report
