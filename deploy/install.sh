@@ -190,8 +190,13 @@ ensure_tooling() {
 }
 
 # ---------------------------------------------------------------------------
-# Hailo check
+# Hailo check / upgrade to 5.3.0 (Hailo-10H only)
 # ---------------------------------------------------------------------------
+# The raspberrypi apt repo's hailo-h10-all metapackage pins HailoRT to 5.1.1,
+# which loads YOLO + depth fine but fails to create the Qwen3 VLM with
+# HAILO_INVALID_OPERATION(6) — "Failed to create VLM". HailoRT 5.3.0+ and the
+# matching PCIe driver/firmware are required. The 5.3.0 packages are hosted
+# next to the HEFs in the CatYolo S3 bucket (see deploy/hefs/manifest-*.yaml).
 check_hailo() {
     info "Checking Hailo SDK..."
 
@@ -205,7 +210,87 @@ check_hailo() {
     detect_hailo_chip
     info "Hailo SDK found: $HAILO_VERSION"
     info "Detected Hailo chip: $HAILO_CHIP"
-    report_installed "Hailo SDK ($HAILO_VERSION, chip=$HAILO_CHIP)"
+    info "Hailo firmware version: ${HAILO_FW_VERSION:-unknown}"
+
+    if [[ "$HAILO_CHIP" == "hailo10h" ]] \
+       && hailo_version_lt "$HAILO_FW_VERSION" "$HAILO10H_REQUIRED_VERSION"; then
+        warn "Hailo-10H firmware $HAILO_FW_VERSION is older than $HAILO10H_REQUIRED_VERSION."
+        warn "CatYolo's Qwen3-VLM requires HailoRT/firmware $HAILO10H_REQUIRED_VERSION+."
+        info "Auto-upgrading HailoRT to $HAILO10H_REQUIRED_VERSION from the CatYolo S3 bucket..."
+        install_hailo_sdk_5_3_0
+        # install_hailo_sdk_5_3_0 always exits (reboot required)
+    fi
+
+    report_installed "Hailo SDK ($HAILO_VERSION, chip=$HAILO_CHIP, fw=${HAILO_FW_VERSION:-unknown})"
+}
+
+install_hailo_sdk_5_3_0() {
+    local work_dir f
+    work_dir=$(mktemp -d)
+
+    # The 5.1.1 metapackage and pcie-driver would otherwise roll us back on
+    # the next apt upgrade. Remove them first so dpkg can install cleanly.
+    info "Removing hailo-h10-all / h10-hailort-pcie-driver 5.1.1 if installed..."
+    if dpkg -l hailo-h10-all 2>/dev/null | grep -q '^ii'; then
+        DEBIAN_FRONTEND=noninteractive apt-get autoremove --purge -y \
+            hailo-h10-all || true
+    fi
+    if dpkg -l h10-hailort-pcie-driver 2>/dev/null | grep -q '^ii'; then
+        DEBIAN_FRONTEND=noninteractive apt-get autoremove --purge -y \
+            h10-hailort-pcie-driver || true
+    fi
+
+    info "Downloading HailoRT $HAILO10H_REQUIRED_VERSION from $HAILO_S3_BASE ..."
+    for f in "${HAILO_S3_FILES[@]}"; do
+        if [[ -t 1 ]]; then
+            curl -fsSL --progress-bar -o "$work_dir/$f" "$HAILO_S3_BASE/$f"
+        else
+            curl -fsSL -o "$work_dir/$f" "$HAILO_S3_BASE/$f"
+        fi
+    done
+
+    # Install kernel module + firmware first (so userspace has something to
+    # talk to after reboot), then CLI + libhailort, then the genai model zoo.
+    info "Installing HailoRT .deb packages..."
+    DEBIAN_FRONTEND=noninteractive dpkg -i \
+        "$work_dir/hailort-pcie-driver_5.3.0_all.deb" \
+        "$work_dir/hailort_5.3.0_arm64.deb" \
+        "$work_dir/hailo_gen_ai_model_zoo_5.3.0_arm64.deb"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -f -qq
+
+    # Install the Python binding into the SYSTEM Python — the worker venv
+    # symlinks hailo* packages from there (see link_hailo_sdk_into_worker_venv).
+    info "Installing HailoRT Python wheel into system Python..."
+    local wheel="$work_dir/hailort-5.3.0-cp313-cp313-linux_aarch64.whl"
+    if command_exists uv; then
+        uv pip install --python "$(command -v python3)" --system --force-reinstall "$wheel"
+    else
+        pip3 install --force-reinstall "$wheel" 2>/dev/null \
+            || pip3 install --break-system-packages --force-reinstall "$wheel"
+    fi
+
+    rm -rf "$work_dir"
+
+    report_installed "HailoRT 5.3.0 (PCIe driver + firmware + CLI + genai zoo + Python wheel)"
+
+    cat <<EOF
+
+===============================================================================
+ HailoRT 5.3.0 installed — REBOOT REQUIRED
+===============================================================================
+ The Hailo PCIe kernel module + device firmware were upgraded. The new
+ firmware is loaded only after a reboot, so the running worker can't talk
+ to the VLM yet.
+
+ Please run:
+   sudo reboot
+
+ After reboot, re-run this installer to continue CatYolo setup:
+   sudo /opt/catyolo/deploy/install.sh
+===============================================================================
+EOF
+    print_report
+    exit 0
 }
 
 # ---------------------------------------------------------------------------

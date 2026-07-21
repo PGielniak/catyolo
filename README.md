@@ -45,9 +45,11 @@ See `architecture/` for detailed docs:
 
 Walk through the following steps manually on the target device - you'll have to reboot twice, that's why it's not included in the automatic script.
 
+> **Important:** The `hailo-h10-all` metapackage from the Raspberry Pi apt repo pins HailoRT to **5.1.1**, which loads YOLO + depth fine but fails to create the Qwen3 VLM with `HAILO_INVALID_OPERATION(6) — "Failed to create VLM"`. CatYolo's VLM needs HailoRT **5.3.0+**, which the installer below downloads from the CatYolo S3 bucket automatically. Do **not** run `apt install hailo-h10-all` — it will roll you back to 5.1.1.
+
 ```bash
 
-# Step 1 — Add Hailo repository
+# Step 1 — Add Hailo apt repository (needed for dkms, kernel headers, build deps)
 sudo tee /etc/apt/sources.list.d/hailo.sources <<EOF
 Types: deb
 URIs: https://hailo:chahy5Zo@extranet.raspberrypi.org/hailo
@@ -58,23 +60,33 @@ EOF
 
 sudo apt update && sudo apt full-upgrade -y && sudo reboot
 
-# Step 2 — DKMS FIRST, then hailo-h10-all (order matters!)
+# Step 2 — Install DKMS (the HailoRT PCIe driver .deb uses DKMS to build
+# the kernel module). DO NOT install hailo-h10-all — it pins 5.1.1.
 sudo apt install dkms
 
-### FOR [ HAILO 10 ]run this ###
-sudo apt install hailo-h10-all
+# Step 3 — Bootstrap HailoRT 5.3.0 manually, OR let the CatYolo installer
+# handle it. To bootstrap manually (fresh Pi with no hailortcli yet):
+curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailo-5-3-0/hailort-pcie-driver_5.3.0_all.deb
+curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailo-5-3-0/hailort_5.3.0_arm64.deb
+curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailo-5-3-0/hailo_gen_ai_model_zoo_5.3.0_arm64.deb
+curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailo-5-3-0/hailort-5.3.0-cp313-cp313-linux_aarch64.whl
 
-### FOR [ HAILO 8 ] run this ###
-sudo apt install hailo-all
+sudo dpkg -i hailort-pcie-driver_5.3.0_all.deb hailort_5.3.0_arm64.deb hailo_gen_ai_model_zoo_5.3.0_arm64.deb
+sudo apt-get install -y -f
+sudo pip3 install --break-system-packages hailort-5.3.0-cp313-cp313-linux_aarch64.whl
 
 sudo reboot
 
-# Step 3 — Verify
+# After reboot, verify the firmware came up at 5.3.x (not just the CLI):
+hailortcli fw-control identify
+# Expected: Firmware Version: 5.3.0 (or later)
+
 hailortcli scan
 # Expected: [-] Device: 0001:01:00.0
 
-
 ```
+
+If an older HailoRT (5.1.1) is already installed, just run the CatYolo installer below — it detects the firmware version, removes the conflicting 5.1.1 metapackages, and re-installs 5.3.0 from the S3 bucket automatically, then prompts for a reboot.
 
 
 ## Installation
