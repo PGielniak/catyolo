@@ -234,7 +234,7 @@ HAILO_FW_VERSION=""
 HAILO10H_REQUIRED_VERSION="5.3.0"
 # Bucket path hosting HailoRT 5.3.0 packages for aarch64 (same bucket as the
 # HEFs — see deploy/hefs/manifest-hailo10h.yaml for the bucket base URL).
-HAILO_S3_BASE="https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailo-5-3-0"
+HAILO_S3_BASE="https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailort-5-3-0"
 HAILO_S3_FILES=(
     "hailort-pcie-driver_5.3.0_all.deb"
     "hailort_5.3.0_arm64.deb"

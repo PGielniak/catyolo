@@ -66,10 +66,10 @@ sudo apt install dkms
 
 # Step 3 — Bootstrap HailoRT 5.3.0 manually, OR let the CatYolo installer
 # handle it. To bootstrap manually (fresh Pi with no hailortcli yet):
-curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailo-5-3-0/hailort-pcie-driver_5.3.0_all.deb
-curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailo-5-3-0/hailort_5.3.0_arm64.deb
-curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailo-5-3-0/hailo_gen_ai_model_zoo_5.3.0_arm64.deb
-curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailo-5-3-0/hailort-5.3.0-cp313-cp313-linux_aarch64.whl
+curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailort-5-3-0/hailort-pcie-driver_5.3.0_all.deb
+curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailort-5-3-0/hailort_5.3.0_arm64.deb
+curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailort-5-3-0/hailo_gen_ai_model_zoo_5.3.0_arm64.deb
+curl -fSLO https://catyolo-hef-bucket.s3.eu-central-1.amazonaws.com/hailort-5-3-0/hailort-5.3.0-cp313-cp313-linux_aarch64.whl
 
 sudo dpkg -i hailort-pcie-driver_5.3.0_all.deb hailort_5.3.0_arm64.deb hailo_gen_ai_model_zoo_5.3.0_arm64.deb
 sudo apt-get install -y -f
