@@ -29,6 +29,8 @@ from detector.inference.factory import (
     release_shared_device,
 )
 from detector.scene_registry import ScenePipelineRegistry
+from detector.settings import fetch_vlm_enabled
+from detector.vlm_watcher import VlmSettingWatcher
 
 # ── Logging ────────────────────────────────────────────────────────────────
 log_level_name = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -81,10 +83,20 @@ def main():
         )
         shared_device = None
 
+    # Global VLM kill-switch (backend settings table). Read ONCE at
+    # startup: when False, no per-scene backend loads the VLM onto the
+    # Hailo-10H at all. None (backend unreachable) falls back to True,
+    # preserving the historical behavior.
+    vlm_enabled = fetch_vlm_enabled(api_base, api_key=api_key)
+    if vlm_enabled is None:
+        vlm_enabled = True
+    logger.info("VLM %s by backend setting (vlm_enabled)", "enabled" if vlm_enabled else "DISABLED")
+
     registry = ScenePipelineRegistry(
         api_base=api_base,
         shared_device=shared_device,
         max_scenes=max_scenes,
+        vlm_enabled=vlm_enabled,
     )
 
     # Optional sample saver — one instance subscribed to ALL pipelines
@@ -127,11 +139,30 @@ def main():
     logger.info("config watcher started (max_scenes=%d)", max_scenes)
 
     shutdown = threading.Event()
+    restart_requested = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: shutdown.set())
     signal.signal(signal.SIGINT, lambda *_: shutdown.set())
+
+    def _on_vlm_setting_changed(_new_value: bool) -> None:
+        logger.info("vlm_enabled flipped — worker will restart to apply the change")
+        restart_requested.set()
+        shutdown.set()
+
+    # Polls the backend vlm_enabled setting; when it diverges from the value
+    # this process started with, the only clean way to load/evict the VLM on
+    # the Hailo-10H is a full process restart (see re-exec below).
+    vlm_watcher = VlmSettingWatcher(
+        api_base=api_base,
+        initial_enabled=vlm_enabled,
+        on_change=_on_vlm_setting_changed,
+        api_key=api_key,
+    )
+    vlm_watcher.start()
+
     try:
         shutdown.wait()
     finally:
+        vlm_watcher.stop()
         # Stop in dependency order: watchers -> action registry -> per-scene
         # pipelines+captures -> shared VDevice.
         config_watcher.stop()
@@ -140,6 +171,14 @@ def main():
         registry.stop_all()
         release_shared_device(shared_device)
         logger.info("shutdown complete")
+
+        if restart_requested.is_set():
+            # Re-exec a fresh worker process so the VLM is fully loaded or
+            # evicted. Works under systemd (same unit, same PID namespace)
+            # and under manual `uv run worker` alike; .env is re-read from
+            # the current working directory by the new process.
+            logger.info("Re-executing worker process (vlm_enabled changed)")
+            os.execv(sys.executable, [sys.executable, "-m", "detector.main", *sys.argv[1:]])
 
 
 if __name__ == "__main__":

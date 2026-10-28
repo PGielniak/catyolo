@@ -72,6 +72,7 @@ class Hailo10Backend(InferenceBackend):
         reference_image: Optional[np.ndarray] = None,
         red_zones: Optional[list] = None,
         shared_device: Any = None,
+        vlm_enabled: bool = True,
     ):
         self._capture = capture
         self.yolo_classes = yolo_classes
@@ -97,6 +98,11 @@ class Hailo10Backend(InferenceBackend):
         # path), the backend owns its own VDevice lifecycle.
         self._shared_device = shared_device
         self._owns_device = shared_device is None
+        # Global kill-switch from the backend settings (vlm_enabled). When
+        # False, _setup_vlm() never loads the VLM onto the Hailo-10H and
+        # capabilities advertise supports_vlm=False so the pipeline skips
+        # all VLM triggers. Changing the setting restarts the worker.
+        self._vlm_enabled = vlm_enabled
 
         self._yolo_infer_model = None
         self._yolo_configured_infer_model = None
@@ -139,7 +145,7 @@ class Hailo10Backend(InferenceBackend):
         # ROUND_ROBIN scheduler can multiplex; 3 is the design target (up to 3
         # cameras). On-device benchmark pending — see architecture/WS2.
         self._capabilities = BackendCapabilities(
-            supports_vlm=True, supports_depth=True, max_concurrent_streams=3,
+            supports_vlm=vlm_enabled, supports_depth=True, max_concurrent_streams=3,
         )
 
     @property
@@ -231,6 +237,8 @@ class Hailo10Backend(InferenceBackend):
         is_global: bool = False,
         global_prompt: Optional[str] = None,
     ) -> None:
+        if not self._vlm_enabled:
+            return
         with self._vlm_request_lock:
             if self._vlm_request is not None:
                 self._vlm_drop_count += 1
@@ -326,6 +334,13 @@ class Hailo10Backend(InferenceBackend):
             )
 
     def _setup_vlm(self) -> None:
+        if not self._vlm_enabled:
+            logger.info("VLM disabled by backend setting (vlm_enabled=false); not loading VLM")
+            self._capabilities = BackendCapabilities(
+                supports_vlm=False,
+                supports_depth=self._capabilities.supports_depth,
+            )
+            return
         if self._vlm_path is None:
             logger.info("No VLM HEF in manifest; VLM disabled")
             self._capabilities = BackendCapabilities(

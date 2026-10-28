@@ -7,6 +7,7 @@ from uuid import UUID
 from models.scene import Scene, Base
 from models.action import Action
 from models.api_key import ApiKey
+from models.setting import Setting
 from contextlib import contextmanager
 
 logger = logging.getLogger("catyolo_backend")
@@ -99,6 +100,17 @@ class SqliteDatabase:
 
     def create_tables(self):
         Base.metadata.create_all(self.engine)
+
+    # ── Settings (key/value) ───────────────────────────────────────────
+
+    def get_setting(self, key: str):
+        with self.get_session() as session:
+            row = session.query(Setting).get(key)
+            return row.value if row is not None else None
+
+    def set_setting(self, key: str, value: str):
+        with self.get_session() as session:
+            session.merge(Setting(key=key, value=value))
 
     # ── Scene ──────────────────────────────────────────────────────────
 

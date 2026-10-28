@@ -30,10 +30,15 @@ class ScenePipelineRegistry:
         api_base: str,
         shared_device: Any,
         max_scenes: int = 3,
+        vlm_enabled: bool = True,
     ):
         self._api_base = api_base
         self._shared_device = shared_device
         self._max_scenes = max_scenes
+        # Snapshot of the backend vlm_enabled setting at worker startup.
+        # Applies process-wide; a change triggers a worker restart (see
+        # VlmSettingWatcher in main), never a per-scene reload.
+        self._vlm_enabled = vlm_enabled
         # scene_id -> {"capture", "pipeline", "rtsp_url"}
         self._entries: dict[str, dict] = {}
         self._lock = threading.Lock()
@@ -155,6 +160,7 @@ class ScenePipelineRegistry:
                 api_base=self._api_base,
                 initial_config=cfg,
                 shared_device=self._shared_device,
+                vlm_enabled=self._vlm_enabled,
             )
             # Subscribe any global handlers (e.g. SampleSaver) before start so
             # no early event is missed.

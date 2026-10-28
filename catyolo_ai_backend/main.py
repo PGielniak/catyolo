@@ -8,11 +8,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from routes import api_key, scene, action, log, frame
+from routes import api_key, scene, action, log, frame, settings
 from services.api_key_service import ApiKeyService
 from services.scene_service import SceneService
 from services.action_service import ActionService
 from services.log_service import LogService
+from services.settings_service import SettingsService
 from dependencies.auth import init_auth
 from database.sqlite import SqliteDatabase
 
@@ -56,6 +57,7 @@ scene.route_config = scene.SceneRouteConfig(logger=logger, scene_service=SceneSe
 action.route_config = action.ActionRouteConfig(logger=logger, action_service=ActionService(database))
 log.route_config = log.LogRouteConfig(logger=logger, log_service=LogService(logger))
 frame.route_config = frame.FrameRouteConfig(logger=logger, database=database)
+settings.route_config = settings.SettingsRouteConfig(logger=logger, settings_service=SettingsService(database))
 
 # ── App ────────────────────────────────────────────────────────────────────
 app = FastAPI()
@@ -73,6 +75,7 @@ app.include_router(scene.router, prefix="/scene", tags=["scene"])
 app.include_router(action.router, prefix="/action", tags=["action"])
 app.include_router(log.router, prefix="/log", tags=["log"])
 app.include_router(frame.router, prefix="/frame", tags=["frame"])
+app.include_router(settings.router, prefix="/settings", tags=["settings"])
 
 
 @app.get("/healthz", tags=["health"])

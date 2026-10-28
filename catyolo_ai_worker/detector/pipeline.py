@@ -36,9 +36,12 @@ class DetectionPipeline:
     # Settle and setup timeouts are now backend-specific; read from the backend
     # instance via RELOAD_SETTLE_SECONDS / SETUP_TIMEOUT class attributes.
 
-    def __init__(self, capture, api_base: str, initial_config: SceneConfig, shared_device: Any = None):
+    def __init__(self, capture, api_base: str, initial_config: SceneConfig, shared_device: Any = None, vlm_enabled: bool = True):
         self._capture = capture
         self._api_base = api_base
+        # Global VLM kill-switch (backend settings); forwarded to the
+        # inference backend so the VLM is never loaded when disabled.
+        self._vlm_enabled = vlm_enabled
         # Shared Hailo VDevice (multi-camera). When None, the backend owns its
         # own device (legacy/test path). Injected so all per-scene pipelines
         # multiplex over one physical device via the HailoRT ROUND_ROBIN scheduler.
@@ -121,6 +124,7 @@ class DetectionPipeline:
             reference_image=cfg.reference_image,
             red_zones=cfg.red_zones,
             shared_device=self._shared_device,
+            vlm_enabled=self._vlm_enabled,
         )
 
     # ------------------------------------------------------------------ #

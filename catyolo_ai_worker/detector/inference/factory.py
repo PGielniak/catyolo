@@ -104,6 +104,7 @@ def create_backend(
     reference_image: Optional[np.ndarray] = None,
     red_zones: Optional[list] = None,
     shared_device: Any = None,
+    vlm_enabled: bool = True,
 ) -> InferenceBackend:
     """Probe the installed Hailo chip (or read HAILO_ARCH env) and return the
     appropriate backend configured with HEF paths from the per-arch manifest.
@@ -132,6 +133,7 @@ def create_backend(
             reference_image=reference_image,
             red_zones=red_zones,
             shared_device=shared_device,
+            vlm_enabled=vlm_enabled,
         )
     else:
         from detector.inference.hailo8_backend import Hailo8Backend

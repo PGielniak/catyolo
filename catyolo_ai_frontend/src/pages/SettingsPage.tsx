@@ -4,6 +4,7 @@ import { api, ApiKeyAuthError, BackendError } from '../api'
 import { storage } from '../storage'
 import { getConfig } from '../config'
 import { logService, type LogLevel } from '../services/logService'
+import { settingsService } from '../services/settingsService'
 
 interface Props {
   navigate: (p: Page) => void
@@ -23,6 +24,11 @@ export default function SettingsPage({ navigate, onLogout }: Props) {
   const [loadingLogs, setLoadingLogs] = useState(false)
   const [logsMsg, setLogsMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
+  // VLM (Hailo-10H) master switch
+  const [vlmEnabled, setVlmEnabled] = useState<boolean | null>(null)
+  const [vlmBusy, setVlmBusy] = useState(false)
+  const [vlmMsg, setVlmMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
   // Log level
   const [currentLevel, setCurrentLevel] = useState<LogLevel | null>(null)
   const [selectedLevel, setSelectedLevel] = useState<LogLevel | null>(null)
@@ -32,6 +38,7 @@ export default function SettingsPage({ navigate, onLogout }: Props) {
 
   useEffect(() => {
     if (host && port) refreshLevel(false)
+    refreshVlm(false)
   }, [])
 
   async function saveBackend(e: React.FormEvent) {
@@ -114,6 +121,35 @@ export default function SettingsPage({ navigate, onLogout }: Props) {
     }
   }
 
+  async function refreshVlm(showError = true) {
+    try {
+      setVlmEnabled(await settingsService.getVlmEnabled())
+    } catch (err) {
+      if (showError) setVlmMsg({ ok: false, text: `Failed to read VLM setting: ${String(err)}` })
+    }
+  }
+
+  async function toggleVlm() {
+    if (vlmEnabled === null || vlmBusy) return
+    const next = !vlmEnabled
+    setVlmBusy(true)
+    setVlmMsg(null)
+    try {
+      await settingsService.setVlmEnabled(next)
+      setVlmEnabled(next)
+      setVlmMsg({
+        ok: true,
+        text: next
+          ? 'VLM enabled. The worker will restart automatically within a few seconds to load the model.'
+          : 'VLM disabled. The worker will restart automatically within a few seconds; VLM answers will be unavailable.',
+      })
+    } catch (err) {
+      setVlmMsg({ ok: false, text: `Failed to update VLM setting: ${String(err)}` })
+    } finally {
+      setVlmBusy(false)
+    }
+  }
+
   function reconfigureApiKey() {
     if (!confirm('This will erase your saved API key and require you to enter a new one. Continue?')) return
     storage.clearApiKey()
@@ -180,6 +216,42 @@ export default function SettingsPage({ navigate, onLogout }: Props) {
           >
             ⚡ Configure Actions
           </button>
+        </section>
+
+        {/* VLM */}
+        <section className="bg-white rounded-xl shadow-sm p-5">
+          <h2 className="font-semibold text-base mb-1">VLM (Hailo-10H)</h2>
+          <p className="text-sm text-gray-500 mb-4">
+            Vision-language model used to verify zone detections and answer scene prompts.
+            Turning it off restarts the worker and frees the model from the AI HAT —
+            detections still fire, but without VLM answers.
+          </p>
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">
+              {vlmEnabled === null ? 'Loading…' : vlmEnabled ? 'Enabled' : 'Disabled'}
+            </span>
+            <button
+              onClick={toggleVlm}
+              disabled={vlmEnabled === null || vlmBusy}
+              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${
+                vlmEnabled ? 'bg-green-500' : 'bg-gray-300'
+              }`}
+              role="switch"
+              aria-checked={vlmEnabled ?? false}
+              title="Toggle VLM"
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  vlmEnabled ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+          {vlmMsg && (
+            <p className={`mt-3 text-sm ${vlmMsg.ok ? 'text-green-600' : 'text-red-600'}`}>
+              {vlmMsg.ok ? '✓' : '✗'} {vlmMsg.text}
+            </p>
+          )}
         </section>
 
         {/* Logs */}

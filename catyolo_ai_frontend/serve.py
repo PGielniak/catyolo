@@ -12,7 +12,7 @@ DIST = os.environ.get('FRONTEND_DIST', os.path.join(os.path.dirname(os.path.absp
 os.makedirs(DIST, exist_ok=True)
 
 # Paths that are proxied to the backend instead of served as static files
-API_PREFIXES = ('/scene/', '/action/', '/log/', '/api_key/', '/frame')
+API_PREFIXES = ('/scene/', '/action/', '/log/', '/api_key/', '/frame', '/settings/')
 
 # Headers we strip when forwarding the backend response (browser handles these itself)
 _DROP_RESPONSE_HEADERS = frozenset({
